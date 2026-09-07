@@ -202,4 +202,59 @@ object KeyboardUtils {
             }
         }
     }
+
+    /**
+     * Calculate baseline Y for vertically centered text in a RectF.
+     */
+    fun centerBaselineY(rect: RectF, paint: Paint): Float {
+        return rect.centerY() - (paint.descent() + paint.ascent()) / 2f
+    }
+
+    fun centerBaselineY(centerY: Float, paint: Paint): Float {
+        return centerY - (paint.descent() + paint.ascent()) / 2f
+    }
+
+    /**
+     * Draw a secondary label (corner symbol) on a key.
+     * Uses font-metrics centering so characters with unusual ascenders
+     * (like backtick) render at the correct position.
+     */
+    fun drawSecondaryLabel(
+        canvas: Canvas,
+        label: String,
+        drawRect: RectF,
+        textPaint: Paint,
+        textColor: Int,
+        density: Float
+    ) {
+        textPaint.textSize = 9f * density
+        textPaint.color = textColor
+        val secX = drawRect.right - 5f * density
+        val secWidth = textPaint.measureText(label)
+        val secCenterX = secX - secWidth / 2f
+        val secY = centerBaselineY(drawRect.top + 9f * density, textPaint)
+        canvas.drawText(label, secCenterX, secY, textPaint)
+    }
+
+    /**
+     * Draw a key label centered in drawRect.
+     * Automatically sizes based on key type (single char, functional, etc.)
+     */
+    fun drawKeyLabel(
+        canvas: Canvas,
+        label: String,
+        drawRect: RectF,
+        textPaint: Paint,
+        textColor: Int,
+        density: Float,
+        isFunctional: Boolean = false
+    ) {
+        textPaint.color = textColor
+        textPaint.textSize = when {
+            label.length == 1 -> 21f * density
+            isFunctional -> 13f * density
+            else -> 16f * density
+        }
+        canvas.drawText(label, drawRect.centerX(), centerBaselineY(drawRect, textPaint), textPaint)
+    }
 }

@@ -246,7 +246,7 @@ class TraditionalEditPadView @JvmOverloads constructor(
             else -> textColor
         }
 
-        val baseline = drawRect.centerY() - (textPaint.descent() + textPaint.ascent()) / 2f
+        val baseline = KeyboardUtils.centerBaselineY(drawRect, textPaint)
 
         if (key.iconId != null) {
             val iconSize = 20f * density

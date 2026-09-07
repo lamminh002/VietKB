@@ -2,25 +2,28 @@ package com.goviet.keyboard.ui
 
 val secondaryKeyMap = mapOf(
     "q" to "@", "w" to "#", "e" to "₫", "r" to "_", "t" to "&",
-    "y" to "-", "u" to "+", "i" to "(", "o" to ")", "p" to "*",
-    "a" to "!", "s" to "?", "d" to "\"", "f" to "'", "g" to ":",
-    "h" to ";", "j" to "/", "k" to "~", "l" to "\\",
-    "z" to "%", "x" to "<", "c" to ">", "v" to "[", "b" to "]",
-    "n" to "{", "m" to "}"
+    "y" to "–", "u" to "±", "i" to "×", "o" to "÷",
+    "p" to "*", "a" to "°", "s" to "?", "d" to "\"",
+    "f" to "'", "g" to ":", "h" to ";",
+    "j" to "/", "k" to "~", "l" to "\\",
+    "z" to "%", "x" to "<", "c" to ">",
+    "v" to "[", "b" to "]", "n" to "{", "m" to "}"
 )
 
 val longPressSymbolMap = mapOf(
+    // Vowels — single symbols from page 2 (symbol pages handle rest)
+    "e" to listOf("₫", "$", "€"),
+    "y" to listOf("–", "—"),
+    "u" to listOf("±", "+"),
+    "i" to listOf("×", "•"),
+    "o" to listOf("÷", "≠"),
+    "a" to listOf("°", "℃"),
+    // Consonants — common daily symbols
     "q" to listOf("@"),
     "w" to listOf("#"),
-    "e" to listOf("₫", "$", "€", "£", "¥", "₩", "¢"),
     "r" to listOf("_", "—"),
     "t" to listOf("&", "§"),
-    "y" to listOf("-", "–", "—"),
-    "u" to listOf("+", "±"),
-    "i" to listOf("(", "[", "{"),
-    "o" to listOf(")", "]"),
     "p" to listOf("*"),
-    "a" to listOf("!", "¡"),
     "s" to listOf("?", "¿"),
     "d" to listOf("\"", "“", "”", "„"),
     "f" to listOf("'", "`"),
@@ -32,25 +35,12 @@ val longPressSymbolMap = mapOf(
     "z" to listOf("%", "‰"),
     "x" to listOf("<", "«"),
     "c" to listOf(">", "»"),
-    "v" to listOf("[", "⟨"),
     "b" to listOf("]", "⟩"),
-    "n" to listOf("{", "}"),
     "m" to listOf("}")
 )
 
 val symbolLongPressMap = mapOf(
-    "1" to listOf("¹", "½", "⅓", "¼"),
-    "2" to listOf("²", "⅔"),
-    "3" to listOf("³", "¾", "⅜"),
-    "4" to listOf("⁴"),
-    "5" to listOf("⁵", "⅝"),
-    "6" to listOf("⁶"),
-    "7" to listOf("⁷", "⅞"),
-    "8" to listOf("⁸"),
-    "9" to listOf("⁹"),
-    "0" to listOf("⁰"),
-    "₫" to listOf("$", "€", "£", "¥", "₩", "¢"),
-    "$" to listOf("₫", "€", "£", "¥", "₩"),
+    // Common punctuation variants
     "!" to listOf("¡"),
     "?" to listOf("¿"),
     "-" to listOf("–", "—", "·"),
@@ -59,13 +49,12 @@ val symbolLongPressMap = mapOf(
     "%" to listOf("‰"),
     "+" to listOf("±"),
     "/" to listOf("\\", "|"),
-    "\\" to listOf("/"),
-    "|" to listOf("/"),
+    "\\" to listOf("/", "|"),
+    "|" to listOf("/", "\\"),
     "`" to listOf("~"),
     "=" to listOf("≠", "≈"),
     "<" to listOf("≤", "«"),
     ">" to listOf("≥", "»"),
-    "^" to listOf("↑"),
     "&" to listOf("§"),
     "*" to listOf("★"),
     "(" to listOf("[", "{"),
@@ -75,30 +64,52 @@ val symbolLongPressMap = mapOf(
     "{" to listOf("["),
     "}" to listOf("]"),
     "~" to listOf("`"),
-    "•" to listOf("★"),
+    "_" to listOf("—", "–"),
     "," to listOf(";", "、"),
     "." to listOf("…", ".com", ".vn"),
+    ":" to listOf(";"),
+    ";" to listOf(":"),
+    // Currency variants
+    "₫" to listOf("$", "€", "£", "¥", "₩", "¢"),
+    "$" to listOf("₫", "€", "£", "¥", "₩"),
     "€" to listOf("$", "£"),
     "£" to listOf("€", "$"),
     "¥" to listOf("₩"),
     "₩" to listOf("¥"),
-    "°" to listOf("℃", "℉"),
+    "₹" to listOf("₨"),
+    "₽" to listOf("₴"),
+    // Math variants
     "±" to listOf("+"),
     "−" to listOf("-"),
-    "×" to listOf("*"),
+    "×" to listOf("·"),
     "÷" to listOf("/"),
     "≠" to listOf("="),
     "≈" to listOf("~"),
     "≤" to listOf("<"),
     "≥" to listOf(">"),
+    "∞" to listOf("°"),
+    "√" to listOf("∛"),
+    "∫" to listOf("∬"),
+    "Δ" to listOf("δ"),
+    // Quote variants
     "“" to listOf("\""),
     "”" to listOf("\""),
     "‘" to listOf("'"),
     "’" to listOf("'"),
     "«" to listOf("<"),
     "»" to listOf(">"),
-    "©" to listOf("®", "™")
+    // Misc
+    "°" to listOf("℃", "℉"),
+    "℃" to listOf("℉"),
+    "℉" to listOf("℃"),
+    "§" to listOf("¶"),
+    "©" to listOf("®", "™"),
+    "®" to listOf("©"),
+    "™" to listOf("©"),
+    // Arrow pairs
+    "↑" to listOf("↓"),
+    "↓" to listOf("↑"),
+    "←" to listOf("→"),
+    "→" to listOf("←"),
+    "…" to listOf("⋯")
 )
-
-
-

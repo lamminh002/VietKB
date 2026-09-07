@@ -264,7 +264,7 @@ class SymbolsPickerGridView @JvmOverloads constructor(
             textPaint.textSize = 19f * density
             textPaint.typeface = boldTypeface
             textPaint.color = textColor
-            val baseline = symbolCardRect.centerY() - (textPaint.descent() + textPaint.ascent()) / 2f
+            val baseline = KeyboardUtils.centerBaselineY(symbolCardRect, textPaint)
             canvas.drawText(sym, symbolCardRect.centerX(), baseline, textPaint)
         }
 
@@ -312,7 +312,7 @@ class SymbolsPickerGridView @JvmOverloads constructor(
                 cy + h * scale / 2f
             )
 
-            val baseline = symbolVisualDrawRect.centerY() - (textPaint.descent() + textPaint.ascent()) / 2f
+            val baseline = KeyboardUtils.centerBaselineY(symbolVisualDrawRect, textPaint)
             if (key.code == "ENTER") {
                 val enterColor = 0xFFFFFFFF.toInt()
                 KeyboardUtils.drawEnterIcon(canvas, symbolVisualDrawRect, currentImeOptions, currentInputType, density, enterColor)
@@ -321,7 +321,7 @@ class SymbolsPickerGridView @JvmOverloads constructor(
                 textPaint.textSize = 12.5f * density
                 textPaint.color = subTextColor
                 textPaint.typeface = normalTypeface
-                val spaceBaseline = symbolVisualDrawRect.centerY() - (textPaint.descent() + textPaint.ascent()) / 2
+                val spaceBaseline = KeyboardUtils.centerBaselineY(symbolVisualDrawRect, textPaint)
                 canvas.drawText(spaceText, symbolVisualDrawRect.centerX(), spaceBaseline, textPaint)
             } else {
                 canvas.drawText(key.label, symbolVisualDrawRect.centerX(), baseline, textPaint)

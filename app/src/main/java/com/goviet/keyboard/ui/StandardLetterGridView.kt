@@ -35,6 +35,7 @@ class StandardLetterGridView @JvmOverloads constructor(
         set(value) {
             if (field != value) {
                 field = value
+                useVietSpace = (value == "VIE")
                 KeyboardLayout.resolveLabels(keys, shiftState, languageMode, imeOptions, inputType)
                 invalidate()
             }
@@ -85,6 +86,11 @@ class StandardLetterGridView @JvmOverloads constructor(
         parentWidth = { width },
         parentHeight = { height }
     )
+
+    // Pre-allocated CharArrays for space key — zero-GC on onDraw
+    private val spaceVietChars = "Tiếng Việt".toCharArray()
+    private val spaceEngChars = "English".toCharArray()
+    private var useVietSpace = true  // sync with languageMode changes
 
     private val horizontalSpacing = 2.8f * density
     private val verticalSpacing = 7.0f * density
@@ -245,12 +251,12 @@ class StandardLetterGridView @JvmOverloads constructor(
                 KeyboardUtils.drawEnterIcon(canvas, drawRect, imeOptions, inputType, density, textColor)
             }
             key.code == "SPACE" -> {
-                val spaceText = if (languageMode == "VIE") "Tiếng Việt" else "English"
+                val spaceChars = if (useVietSpace) spaceVietChars else spaceEngChars
                 textPaint.textSize = 12.5f * density
                 textPaint.color = subTextColor
                 textPaint.typeface = normalTypeface
-                val baseline = drawRect.centerY() - (textPaint.descent() + textPaint.ascent()) / 2
-                canvas.drawText(spaceText, drawRect.centerX(), baseline, textPaint)
+                val baseline = KeyboardUtils.centerBaselineY(drawRect, textPaint)
+                canvas.drawText(spaceChars, 0, spaceChars.size, drawRect.centerX(), baseline, textPaint)
 
                 val indicatorW = 36f * density
                 val indicatorH = 2.5f * density
@@ -262,20 +268,13 @@ class StandardLetterGridView @JvmOverloads constructor(
                 canvas.drawRoundRect(shadowDrawRect, 1.2f * density, 1.2f * density, paint)
             }
             else -> {
-                val baseline = drawRect.centerY() - (textPaint.descent() + textPaint.ascent()) / 2
-                canvas.drawText(key.label, drawRect.centerX(), baseline, textPaint)
+                KeyboardUtils.drawKeyLabel(canvas, key.label, drawRect, textPaint, textColor, density)
             }
         }
 
         val secLabel = key.secondaryLabel
         if (secLabel != null && !isShiftActive && key.code != "SPACE") {
-            textPaint.textSize = 9f * density
-            textPaint.color = subTextColor
-            val secX = drawRect.right - 5f * density
-            val secY = drawRect.top + drawRect.height() * 0.28f
-            val textWidth = textPaint.measureText(secLabel)
-            val secCenterX = secX - textWidth / 2f
-            canvas.drawText(secLabel, secCenterX, secY, textPaint)
+            KeyboardUtils.drawSecondaryLabel(canvas, secLabel, drawRect, textPaint, subTextColor, density)
         }
     }
 

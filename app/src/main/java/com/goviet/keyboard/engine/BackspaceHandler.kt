@@ -1,39 +1,144 @@
 package com.goviet.keyboard.engine
 
+import java.text.BreakIterator
 import android.view.KeyEvent
 import android.view.inputmethod.InputConnection
 
-/**
- * Single Source of Truth for all Backspace, Delete, and Deletion-related operations.
- *
- * Responsibilities:
- * 1. Active selection deletion
- * 2. Active composing session grapheme reduction via VietnameseEditReducer
- * 3. Macro expansion rollback (e.g. restoring 'vn' after typing 'vn ')
- * 4. Unicode Grapheme Cluster deletion (proper handling of emojis, accents, surrogate pairs)
- * 5. Word-level backward deletion (Ctrl+Backspace / Swipe delete)
- */
+// ============================================================
+// WORD AT CURSOR
+// ============================================================
+data class WordAtCursor(
+    val text: String,
+    val startInEditor: Int,
+    val endInEditor: Int,
+    val cursorOffset: Int
+)
+
+// ============================================================
+// GRAPHEME EDITOR (Unicode grapheme cluster manipulation)
+// ============================================================
+object GraphemeEditor {
+
+    private val threadLocalBreakIterator = ThreadLocal.withInitial {
+        BreakIterator.getCharacterInstance()
+    }
+
+    private fun getIterator(text: String): BreakIterator {
+        val iterator = threadLocalBreakIterator.get() ?: BreakIterator.getCharacterInstance()
+        iterator.setText(text)
+        return iterator
+    }
+
+    fun previousBoundary(text: String, cursorIndex: Int): Int {
+        if (text.isEmpty() || cursorIndex <= 0) return 0
+        val clampedCursor = cursorIndex.coerceIn(0, text.length)
+        val prev = getIterator(text).preceding(clampedCursor)
+        return if (prev != BreakIterator.DONE && prev >= 0) prev else 0
+    }
+
+    fun nextBoundary(text: String, cursorIndex: Int): Int {
+        if (text.isEmpty() || cursorIndex >= text.length) return text.length
+        val clampedCursor = cursorIndex.coerceIn(0, text.length)
+        val next = getIterator(text).following(clampedCursor)
+        return if (next != BreakIterator.DONE && next >= 0) next else text.length
+    }
+
+    fun deleteBackward(text: String, cursorIndex: Int): Pair<String, Int> {
+        if (text.isEmpty() || cursorIndex <= 0) return Pair(text, 0)
+        val clampedCursor = cursorIndex.coerceIn(0, text.length)
+        val start = previousBoundary(text, clampedCursor)
+        if (start >= clampedCursor) return Pair(text, clampedCursor)
+        val newLength = text.length - (clampedCursor - start)
+        val sb = StringBuilder(newLength)
+        sb.append(text, 0, start)
+        sb.append(text, clampedCursor, text.length)
+        return Pair(sb.toString(), start)
+    }
+
+    fun deleteForward(text: String, cursorIndex: Int): Pair<String, Int> {
+        if (text.isEmpty() || cursorIndex >= text.length) return Pair(text, cursorIndex.coerceIn(0, text.length))
+        val clampedCursor = cursorIndex.coerceIn(0, text.length)
+        val end = nextBoundary(text, clampedCursor)
+        if (end <= clampedCursor) return Pair(text, clampedCursor)
+        val newLength = text.length - (end - clampedCursor)
+        val sb = StringBuilder(newLength)
+        sb.append(text, 0, clampedCursor)
+        sb.append(text, end, text.length)
+        return Pair(sb.toString(), clampedCursor)
+    }
+
+    fun getBackwardGraphemeLength(text: String, cursorIndex: Int = text.length): Int {
+        if (text.isEmpty() || cursorIndex <= 0) return 0
+        return cursorIndex.coerceIn(0, text.length) - previousBoundary(text, cursorIndex.coerceIn(0, text.length))
+    }
+
+    fun getForwardGraphemeLength(text: String, cursorIndex: Int = 0): Int {
+        if (text.isEmpty() || cursorIndex >= text.length) return 0
+        val clamped = cursorIndex.coerceIn(0, text.length)
+        return nextBoundary(text, clamped) - clamped
+    }
+}
+
+// ============================================================
+// EDITED VIETNAMESE RECOGNIZER — canonical rime-table based
+// ============================================================
+object EditedVietnameseRecognizer {
+
+    /**
+     * A committed word "looks Vietnamese" when it parses as a valid
+     * Vietnamese onset + a canonical rime (or a leading part of one).
+     * Backed by the zero-GC [RimeMap] flat map instead of the old
+     * NON_VN_LETTERS heuristic, so foreign words like "warm"/"confirm"
+     * are rejected structurally rather than by letter blacklists.
+     */
+    fun canRecompose(word: String): Boolean {
+        if (word.isEmpty()) return false
+        val lower = word.lowercase()
+        // Strip tone diacritics only — base letters (ê, â, ư, ...) are kept
+        // as-is so the remaining rime matches the canonical table.
+        val stripped = VietnameseUnicode.stripToneFromWord(lower)
+        if (stripped.isEmpty()) return false
+
+        // Longest valid onset wins (ONSETS is ordered longest-first).
+        var onsetLen = 0
+        for (cand in VietnamesePhonology.ONSETS) {
+            if (stripped.startsWith(cand)) {
+                onsetLen = cand.length
+                break
+            }
+        }
+
+        val rime = stripped.substring(onsetLen)
+        if (rime.isEmpty()) return false
+
+        // The rime must be a (possibly partial) canonical Vietnamese rime
+        // and must contain at least one base vowel.
+        if (!RimeMap.isValidPrefix(RimeMap.hash(rime))) return false
+        return rime.any { VietnamesePhonology.isBaseVowel(it) }
+    }
+
+    fun classify(word: String): CompositionMode {
+        return if (canRecompose(word)) CompositionMode.VIETNAMESE else CompositionMode.LITERAL
+    }
+}
+
+// ============================================================
+// BACKSPACE HANDLER (deletion operations)
+// ============================================================
 class BackspaceHandler(
     private val controller: ImeInputConnectionController
 ) {
 
-    /**
-     * Executes the primary Backspace action according to the standardized priority chain:
-     * 1. Active Selection -> Delete Selection
-     * 2. Active Composing Session -> Grapheme reduction via VietnameseEditReducer
-     * 3. Macro Rollback -> Restore original abbreviation trigger
-     * 4. Raw Editor Content -> Delete single Unicode grapheme cluster
-     */
+    // ============================================================
+    // ENTRY POINTS
+    // ============================================================
+
     fun handleBackspace(ic: InputConnection) {
         ic.beginBatchEdit()
         try {
-            // Touch lastKeyPressTime so that onUpdateSelection recognises the
-            // backspace as "recent typing" and does not spuriously clearState().
             controller.lastKeyPressTime = System.currentTimeMillis()
 
-            // Priority 1: Selection deletion
-            val hasSelection = (controller.cachedSelStart != controller.cachedSelEnd) || controller.isSelecting
-            if (hasSelection) {
+            if (controller.hasRealSelection(ic)) {
                 deleteSelection(ic)
                 controller.clearState()
                 controller.isSelecting = false
@@ -41,38 +146,31 @@ class BackspaceHandler(
                 return
             }
 
-            // Priority 2: Active composing session undo (grapheme deletion preserving syllable structure)
             if (controller.composingRaw.isNotEmpty()) {
                 performComposingBackspace(ic)
                 controller.service.evaluateAutoShift()
                 return
             }
 
-            // Priority 3: Macro expansion rollback
-            val macro = controller.lastExpandedMacro
-            if (macro != null && (System.currentTimeMillis() - macro.timestamp < 3000)) {
-                val beforeText = ic.getTextBeforeCursor(macro.expandedText.length + 10, 0)?.toString() ?: ""
-                if (beforeText.endsWith(macro.expandedText)) {
-                    controller.lastExpandedMacro = null
-                    val len = macro.expandedText.length
-                    deleteBefore(ic, len)
-                    controller.composingRaw.clear()
-                    controller.composingRaw.append(macro.trigger)
-                    controller.composingCursorIndex = macro.trigger.length
-                    val syncResult = controller.syncResult
-                    controller.inputEngine.syncStateFromRaw(macro.trigger, controller.isVietnamese, syncResult)
-                    val compiled = syncResult.displayText
-                    val cased = VietnameseUnicode.applyCasingFromRaw(compiled, macro.trigger)
-                    syncResult.snapshot.displayBuffer.clear()
-                    syncResult.snapshot.displayBuffer.append(cased)
-                    controller.updateComposingUI(ic, explicitCompiled = cased)
-                    controller.service.evaluateAutoShift()
-                    return
-                }
+            if (rollbackMacroExpansion(ic)) {
+                controller.service.evaluateAutoShift()
+                return
             }
-            controller.lastExpandedMacro = null
 
-            // Priority 4: Raw Unicode Grapheme Cluster deletion (formed text / foreign text / emoji)
+            // If the caret sits inside a Vietnamese word, adopt the prefix before
+            // the caret as the preedit first (underline from the whitespace up to
+            // the caret) so backspace deletes a complete letter inside the preedit.
+            // This keeps the behavior identical regardless of whether the editor
+            // reported the caret move through onUpdateSelection.
+            controller.adoptPrefixAtCaret(ic)
+            if (controller.composingRaw.isNotEmpty()) {
+                performComposingBackspace(ic)
+                controller.service.evaluateAutoShift()
+                return
+            }
+
+            // Committed text, Gboard/Laban style: remove the whole preceding
+            // Unicode grapheme cluster ('á' -> "", 'nguyễn' -> 'nguyễ').
             deleteLastGraphemeOrChar(ic)
             controller.service.evaluateAutoShift()
         } finally {
@@ -80,106 +178,12 @@ class BackspaceHandler(
         }
     }
 
-    /**
-     * Executes word-level deletion backward (e.g. for long-press backspace or swipe delete).
-     */
-    fun handleDeleteWord(ic: InputConnection) {
-        ic.beginBatchEdit()
-        try {
-            controller.lastExpandedMacro = null
-            if (controller.composingRaw.isNotEmpty()) {
-                val lastLen = controller.lastSetComposingText?.length ?: 0
-                controller.resetComposingUI(ic, lastLen)
-                controller.service.evaluateAutoShift()
-                return
-            }
-
-            val beforeText = ic.getTextBeforeCursor(100, 0) ?: ""
-            if (beforeText.isNotEmpty()) {
-                val trimmed = beforeText.toString().trimEnd()
-                val lastSpaceIndex = trimmed.lastIndexOf(' ')
-                val charsToDelete = beforeText.length - (if (lastSpaceIndex == -1) 0 else lastSpaceIndex + 1).coerceAtLeast(0)
-                deleteBefore(ic, charsToDelete)
-            } else {
-                deleteLastGraphemeOrChar(ic)
-            }
-            controller.service.evaluateAutoShift()
-        } finally {
-            ic.endBatchEdit()
-        }
-    }
-
-    /**
-     * Performs backspace during an active composing session.
-     * Reduces grapheme clusters while preserving syllable structure and tone marks.
-     */
-    fun performComposingBackspace(ic: InputConnection) {
-        val currentDisplay = controller.lastSetComposingText ?: controller.compileComposingText()
-        if (currentDisplay.isEmpty()) {
-            val lastLen = controller.lastSetComposingText?.length ?: 0
-            controller.resetComposingUI(ic, lastLen)
-            controller.clearState()
-            return
-        }
-
-        // Gboard / Laban Key style: backspace removes the preceding Unicode grapheme
-        // cluster as a single unit (á -> "", nguyễn -> nguyễ -> ...).
-        // VietnameseEditReducer re-derives the syllable state from the reduced display.
-        val cursorInDisplay = VietnameseCursorMapper.rawToDisplay(
-            raw = controller.composingRaw.toString(),
-            rawCursor = controller.composingCursorIndex,
-            isVietnamese = controller.isVietnamese,
-            options = controller.inputEngine.options
-        )
-
-        val result = VietnameseEditReducer.reduceBackspace(
-            currentDisplay = currentDisplay,
-            cursorInDisplay = cursorInDisplay,
-            currentOwnership = if (controller.isVietnamese) CompositionMode.VIETNAMESE else CompositionMode.LITERAL,
-            options = controller.inputEngine.options
-        )
-        applyEditResult(ic, result)
-    }
-
-    /**
-     * Performs forward delete during an active composing session.
-     * Uses VietnameseEditReducer.reduceDeleteForward() to mutate state.
-     */
-    fun performComposingDeleteForward(ic: InputConnection) {
-        val currentDisplay = controller.lastSetComposingText ?: controller.compileComposingText()
-        if (currentDisplay.isEmpty()) {
-            val lastLen = controller.lastSetComposingText?.length ?: 0
-            controller.resetComposingUI(ic, lastLen)
-            controller.clearState()
-            return
-        }
-
-        // Determine exact cursor position in display text
-        val cursorInDisplay = VietnameseCursorMapper.rawToDisplay(
-            raw = controller.composingRaw.toString(),
-            rawCursor = controller.composingCursorIndex,
-            isVietnamese = controller.isVietnamese,
-            options = controller.inputEngine.options
-        )
-
-        val result = VietnameseEditReducer.reduceDeleteForward(
-            currentDisplay = currentDisplay,
-            cursorInDisplay = cursorInDisplay,
-            currentOwnership = if (controller.isVietnamese) CompositionMode.VIETNAMESE else CompositionMode.LITERAL,
-            options = controller.inputEngine.options
-        )
-
-        applyEditResult(ic, result)
-    }
-
-    /**
-     * Executes Forward Delete (Delete key).
-     */
     fun handleDeleteForward(ic: InputConnection) {
         ic.beginBatchEdit()
         try {
-            val hasSelection = (controller.cachedSelStart != controller.cachedSelEnd) || controller.isSelecting
-            if (hasSelection) {
+            controller.lastKeyPressTime = System.currentTimeMillis()
+
+            if (controller.hasRealSelection(ic)) {
                 deleteSelection(ic)
                 controller.clearState()
                 controller.isSelecting = false
@@ -200,48 +204,175 @@ class BackspaceHandler(
         }
     }
 
-    private fun applyEditResult(ic: InputConnection, result: VietnameseEditReducer.EditResult) {
-        if (result.display.isEmpty()) {
-            val lastLen = controller.lastSetComposingText?.length ?: 0
-            controller.resetComposingUI(ic, lastLen)
-            controller.clearState()
-            return
-        }
-
-        controller.composingRaw.clear()
-        controller.composingRaw.append(result.canonicalRaw)
-        controller.isVietnamese = (result.ownership == CompositionMode.VIETNAMESE)
-        controller.composingCursorIndex = VietnameseCursorMapper.displayToRaw(
-            raw = result.canonicalRaw,
-            display = result.display,
-            displayOffset = result.cursorInDisplay,
-            isVietnamese = (result.ownership == CompositionMode.VIETNAMESE),
-            options = controller.inputEngine.options
-        )
-
-        if (result.ownership == CompositionMode.VIETNAMESE) {
-            controller.inputEngine.loadSyllable(result.syllableState, true)
-        } else {
-            controller.inputEngine.loadSyllable(
-                VietnameseComposer.SyllableState(rawSuffix = result.display),
-                false
-            )
-        }
-
-        replaceComposingText(ic, result.display)
-
-        if (controller.composingStartInEditor >= 0) {
-            val newCursor = controller.composingStartInEditor + result.cursorInDisplay
-            controller.moveCursorTo(ic, newCursor)
+    fun handleDeleteWord(ic: InputConnection) {
+        ic.beginBatchEdit()
+        try {
+            controller.lastExpandedMacro = null
+            if (controller.composingRaw.isNotEmpty()) {
+                // Delete the whole preedit (swipe/word-delete), then clear composing UI.
+                val lastLen = controller.lastSetComposingText?.length ?: 0
+                controller.resetComposingUI(ic, lastLen)
+                controller.service.evaluateAutoShift()
+                return
+            }
+            deleteLastWordInEditor(ic)
+            controller.service.evaluateAutoShift()
+        } finally {
+            ic.endBatchEdit()
         }
     }
 
+    // ============================================================
+    // COMPOSING EDITS — display-level grapheme edits + re-adoption
+    // ============================================================
+
     /**
-     * Deletes the preceding Unicode grapheme cluster (supporting emojis, composite marks).
+     * Backspace while composing — deletes one complete displayed letter
+     * (Unicode grapheme cluster), exactly like committed-text backspace and like
+     * the big keyboard apps: "thấy" → "thấ" → "th" → "t" → "".
+     *
+     * Raw Telex keystrokes are never deleted one-by-one here; after removing the
+     * grapheme from the display, the remaining display is re-adopted to its
+     * canonical raw encoding so typing continues seamlessly.
      */
+    private fun performComposingBackspace(ic: InputConnection) {
+        val display = controller.lastSetComposingText ?: controller.compileComposingText()
+        if (display.isEmpty()) {
+            deleteLastGraphemeOrChar(ic)
+            return
+        }
+
+        val caretInDisplay = controller.displayCursorIndex()
+        if (caretInDisplay <= 0) {
+            // Caret is at the very beginning of the preedit: the backspace must
+            // hit committed text while the preedit itself stays untouched.
+            deleteCommittedGraphemeBeforePreedit(ic)
+            return
+        }
+
+        // Remove the whole grapheme cluster immediately before the caret.
+        val clusterStart = GraphemeEditor.previousBoundary(display, caretInDisplay)
+        if (clusterStart >= caretInDisplay) {
+            deleteLastGraphemeOrChar(ic)
+            return
+        }
+        val sb = StringBuilder(display.length - (caretInDisplay - clusterStart))
+        sb.append(display, 0, clusterStart)
+        sb.append(display, caretInDisplay, display.length)
+        resyncPreeditFromDisplay(ic, sb.toString(), caretInDisplay = clusterStart)
+    }
+
+    private fun performComposingDeleteForward(ic: InputConnection) {
+        val display = controller.lastSetComposingText ?: controller.compileComposingText()
+        if (display.isEmpty()) {
+            deleteNextGraphemeOrChar(ic)
+            return
+        }
+
+        val caretInDisplay = controller.displayCursorIndex()
+        if (caretInDisplay >= display.length) {
+            deleteNextGraphemeOrChar(ic)
+            return
+        }
+
+        // Remove the whole grapheme cluster immediately after the caret.
+        val clusterEnd = GraphemeEditor.nextBoundary(display, caretInDisplay)
+        if (clusterEnd <= caretInDisplay) {
+            deleteNextGraphemeOrChar(ic)
+            return
+        }
+        val sb = StringBuilder(display.length - (clusterEnd - caretInDisplay))
+        sb.append(display, 0, caretInDisplay)
+        sb.append(display, clusterEnd, display.length)
+        resyncPreeditFromDisplay(ic, sb.toString(), caretInDisplay = caretInDisplay)
+    }
+
+    /**
+     * One unified re-sync path after any display-level edit: adopt the new display
+     * back to canonical Telex raw keystrokes (when possible), rebuild the live
+     * state, update the composing text and restore the caret position.
+     */
+    private fun resyncPreeditFromDisplay(ic: InputConnection, display: String, caretInDisplay: Int) {
+        if (display.isEmpty()) {
+            resetPreeditToEmpty(ic)
+            return
+        }
+
+        val adopt = controller.inputEngine.adoptWord(display)
+        val useVietnamese = adopt != null && adopt.isValid &&
+                controller.compileText(adopt.canonicalRaw) == display
+        val canonical = if (useVietnamese) adopt!!.canonicalRaw else display
+
+        val raw = controller.composingRaw
+        raw.clear()
+        raw.append(canonical)
+
+        if (useVietnamese) {
+            controller.inputEngine.replayRawToState(canonical, controller.composingState)
+        } else {
+            controller.composingState.reset()
+            controller.composingState.rawSuffix = canonical
+        }
+        controller.isVietnamese = useVietnamese
+        controller.composingCursorIndex = controller.rawIndexOfDisplay(
+            canonical, display, caretInDisplay, useVietnamese
+        )
+
+        replaceComposingText(ic, display)
+        if (caretInDisplay < display.length && controller.composingStartInEditor >= 0) {
+            controller.moveCursorTo(ic, controller.composingStartInEditor + caretInDisplay)
+        }
+    }
+
+    /** Backspace on committed text immediately before the preedit, keeping it intact. */
+    private fun deleteCommittedGraphemeBeforePreedit(ic: InputConnection) {
+        val beforeText = ic.getTextBeforeCursor(128, 0)?.toString() ?: ""
+        var charsToDelete = GraphemeEditor.getBackwardGraphemeLength(beforeText)
+        if (charsToDelete <= 0) charsToDelete = 1
+        deleteBefore(ic, charsToDelete)
+        if (controller.composingStartInEditor >= charsToDelete) {
+            controller.composingStartInEditor -= charsToDelete
+        }
+    }
+
+    private fun resetPreeditToEmpty(ic: InputConnection) {
+        val lastLen = controller.lastSetComposingText?.length ?: 0
+        controller.resetComposingUI(ic, lastLen)
+    }
+
+
+    // ============================================================
+    // MACRO ROLLBACK
+    // ============================================================
+
+    private fun rollbackMacroExpansion(ic: InputConnection): Boolean {
+        val macro = controller.lastExpandedMacro ?: return false
+        if (System.currentTimeMillis() - macro.timestamp >= 3000) {
+            controller.lastExpandedMacro = null
+            return false
+        }
+        val beforeText = ic.getTextBeforeCursor(macro.expandedText.length + 16, 0)?.toString() ?: ""
+        if (!beforeText.endsWith(macro.expandedText)) {
+            controller.lastExpandedMacro = null
+            return false
+        }
+        controller.lastExpandedMacro = null
+        deleteBefore(ic, macro.expandedText.length)
+        // Replay the macro trigger through the same raw recompiler.
+        controller.composingRaw.clear()
+        controller.composingRaw.append(macro.trigger)
+        controller.composingCursorIndex = macro.trigger.length
+        controller.isVietnamese = true
+        replaceComposingText(ic, controller.compileRawDisplay())
+        return true
+    }
+
+    // ============================================================
+    // COMMITTED EDITOR — grapheme-cluster deletion
+    // ============================================================
+
+    /** Delete the whole grapheme cluster before the caret ('á' -> ""). */
     fun deleteLastGraphemeOrChar(ic: InputConnection) {
-        // Use a generous buffer: a ZWJ emoji like 👨‍👩‍👧‍👦 spans many UTF-16 code units
-        // and would be truncated by a small fixed window.
         val beforeText = ic.getTextBeforeCursor(128, 0)
         if (beforeText != null && beforeText.isNotEmpty()) {
             val text = beforeText.toString()
@@ -254,26 +385,32 @@ class BackspaceHandler(
         deleteBefore(ic, 1)
     }
 
-    /**
-     * Deletes the next Unicode grapheme cluster forward (Forward Delete).
-     */
     fun deleteNextGraphemeOrChar(ic: InputConnection) {
         val afterText = ic.getTextAfterCursor(128, 0)
         if (afterText != null && afterText.isNotEmpty()) {
             val text = afterText.toString()
             val charsToDelete = GraphemeEditor.getForwardGraphemeLength(text)
             if (charsToDelete > 0) {
-                ic.deleteSurroundingText(0, charsToDelete)
+                deleteForwardCount(ic, charsToDelete)
                 return
             }
         }
-        ic.deleteSurroundingText(0, 1)
+        deleteForwardCount(ic, 1)
     }
 
-    /**
-     * Deletes `count` characters before the cursor, using key events in immediate-commit
-     * mode (so the editor treats them as real backspaces) or deleteSurroundingText otherwise.
-     */
+    /** Delete the last word (and any trailing whitespace) before the caret. */
+    private fun deleteLastWordInEditor(ic: InputConnection) {
+        val beforeText = ic.getTextBeforeCursor(100, 0)?.toString() ?: ""
+        if (beforeText.isEmpty()) {
+            deleteLastGraphemeOrChar(ic)
+            return
+        }
+        val trimmed = beforeText.trimEnd()
+        val wordStart = if (trimmed.isEmpty()) 0 else trimmed.lastIndexOf(' ') + 1
+        val charsToDelete = beforeText.length - wordStart
+        if (charsToDelete > 0) deleteBefore(ic, charsToDelete) else deleteLastGraphemeOrChar(ic)
+    }
+
     private fun deleteBefore(ic: InputConnection, count: Int) {
         if (controller.isImmediateCommitMode()) {
             sendBackspaceEvents(ic, count)
@@ -282,22 +419,27 @@ class BackspaceHandler(
         }
     }
 
-    /**
-     * Deletes the active selection (or falls back to deleting a single character).
-     */
+    private fun deleteForwardCount(ic: InputConnection, count: Int) {
+        if (controller.isImmediateCommitMode()) {
+            sendForwardDeleteEvents(ic)
+        } else {
+            ic.deleteSurroundingText(0, count)
+        }
+    }
+
     private fun deleteSelection(ic: InputConnection) {
         if (controller.isImmediateCommitMode()) {
-            sendDelKey(ic)
+            sendBackspaceEvents(ic, 1) // KEYCODE_DEL with an active selection deletes it
         } else {
             ic.commitText("", 1)
         }
     }
 
-    /**
-     * Replaces the current composing text with a new display string, keeping
-     * composition state consistent regardless of immediate-commit mode.
-     */
-    private fun replaceComposingText(ic: InputConnection, display: String) {
+    // ============================================================
+    // PREEDIT RENDERING
+    // ============================================================
+
+    fun replaceComposingText(ic: InputConnection, display: String) {
         if (controller.isImmediateCommitMode()) {
             val lastStr = controller.lastSetComposingText ?: ""
             sendBackspaceEvents(ic, lastStr.length)
@@ -317,7 +459,8 @@ class BackspaceHandler(
         }
     }
 
-    fun sendDelKey(ic: InputConnection) {
-        sendBackspaceEvents(ic, 1)
+    private fun sendForwardDeleteEvents(ic: InputConnection) {
+        ic.sendKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_FORWARD_DEL))
+        ic.sendKeyEvent(KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_FORWARD_DEL))
     }
 }

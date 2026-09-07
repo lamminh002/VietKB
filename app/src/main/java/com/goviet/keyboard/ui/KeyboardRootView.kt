@@ -28,7 +28,6 @@ import com.goviet.core.dpPx
 import com.goviet.keyboard.util.IconDrawer
 import com.goviet.keyboard.VietnameseInputMethodService
 import com.goviet.keyboard.clipboard.ClipboardEntity
-import com.goviet.keyboard.engine.VietnameseInputEngine
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 
@@ -999,7 +998,7 @@ class UnifiedTopHeaderView(context: Context, private val rootView: KeyboardRootV
                         textPaint.color = if (isActive) accentColor else inactiveColor
                         textPaint.textSize = if (label == "1?#") 11f * density else 14f * density
                         textPaint.typeface = if (isActive) Typeface.create(Typeface.DEFAULT, Typeface.BOLD) else Typeface.create(Typeface.DEFAULT, Typeface.NORMAL)
-                        val baseline = tabCy - (textPaint.descent() + textPaint.ascent()) / 2f
+                        val baseline = KeyboardUtils.centerBaselineY(tabCy, textPaint)
                         canvas.drawText(label, tabCx, baseline, textPaint)
                     }
                 }

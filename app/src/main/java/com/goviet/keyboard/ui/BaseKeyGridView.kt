@@ -165,7 +165,8 @@ abstract class BaseKeyGridView @JvmOverloads constructor(
     protected fun drawKeyBackgroundScaled(
         canvas: Canvas,
         key: Key,
-        scale: Float = if (key.isPressed) 0.96f else 1.0f
+        scale: Float = if (key.isPressed) 0.96f else 1.0f,
+        cornerRadius: Float = keyCornerRadius
     ) {
         val bgColor = if (key.isFunctional || key.isSpecialEnter) functionalKeyBgColor else keyBgColor
         val pressedBg = if (key.isFunctional || key.isSpecialEnter) functionalKeyPressedBgColor else keyPressedBgColor
@@ -174,7 +175,7 @@ abstract class BaseKeyGridView @JvmOverloads constructor(
             canvas = canvas,
             drawRect = drawRect,
             shadowRect = key.shadowRect,
-            cornerRadius = keyCornerRadius,
+            cornerRadius = cornerRadius,
             density = density,
             isDark = isDark,
             keyStyle = keyStyle,

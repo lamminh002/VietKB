@@ -2,15 +2,10 @@ package com.goviet.keyboard.ui
 
 import android.content.Context
 import android.graphics.Canvas
-import android.graphics.Color
-import android.graphics.Paint
-import android.graphics.RectF
-import android.graphics.Typeface
 import android.os.Handler
 import android.os.Looper
 import android.util.AttributeSet
 import android.view.MotionEvent
-import android.view.View
 import com.goviet.core.density
 
 class TraditionalTpadView @JvmOverloads constructor(
@@ -204,7 +199,6 @@ class TraditionalTpadView @JvmOverloads constructor(
         keysList.add(Key(code = "ENTER", label = enterLabel, isSpecialEnter = true))
 
         calculateLayout()
-        updateColors()
     }
 
     private fun handleKeyClick(key: Key) {
@@ -217,9 +211,6 @@ class TraditionalTpadView @JvmOverloads constructor(
         }
     }
 
-    private fun updateColors() {
-        invalidate()
-    }
 
     private fun findKeyByCoordinates(x: Float, y: Float): Key? {
         for (key in keysList) {
@@ -235,65 +226,21 @@ class TraditionalTpadView @JvmOverloads constructor(
         canvas.drawColor(panelBgColor)
 
         for (key in keysList) {
-            val isPressed = key.isPressed
-            val scale = if (isPressed) 0.96f else 1.0f
-
-            val w = key.visualRect.width()
-            val h = key.visualRect.height()
-            val cx = key.visualRect.centerX()
-            val cy = key.visualRect.centerY()
-
-            drawRect.set(
-                cx - w * scale / 2f,
-                cy - h * scale / 2f,
-                cx + w * scale / 2f,
-                cy + h * scale / 2f
+            computeScaledRect(
+                cx = key.visualRect.centerX(),
+                cy = key.visualRect.centerY(),
+                w = key.visualRect.width(),
+                h = key.visualRect.height(),
+                scale = if (key.isPressed) 0.96f else 1.0f
             )
-
-            val bgColor = if (key.isSpecialEnter || key.isFunctional) functionalKeyBgColor else keyBgColor
-            val pressedBgColor = if (key.isFunctional || key.isSpecialEnter) functionalKeyPressedBgColor else keyPressedBgColor
-
-            KeyRenderer.drawStandardKey(
-                canvas = canvas,
-                drawRect = drawRect,
-                shadowRect = key.shadowRect,
-                cornerRadius = 8f * density,
-                density = density,
-                isDark = isDark,
-                keyStyle = keyStyle,
-                isPressed = isPressed,
-                isFunctional = key.isFunctional,
-                isSpecialEnter = key.isSpecialEnter,
-                bgColor = bgColor,
-                pressedBgColor = pressedBgColor
-            )
+            drawKeyBackgroundScaled(canvas, key, cornerRadius = 8f * density)
 
             // Draw label
-            textPaint.color = textColor
-            textPaint.typeface = boldTypeface
+            KeyboardUtils.drawKeyLabel(canvas, key.label, drawRect, textPaint, textColor, density, key.isFunctional)
 
-            val isSingleChar = key.label.length == 1
-            if (isSingleChar) {
-                textPaint.textSize = 21f * density
-            } else if (key.isFunctional) {
-                textPaint.textSize = 13f * density
-            } else {
-                textPaint.textSize = 16f * density
-            }
-
-            val baseline = drawRect.centerY() - (textPaint.descent() + textPaint.ascent()) / 2f
-            canvas.drawText(key.label, drawRect.centerX(), baseline, textPaint)
-
-            // Draw secondary label if present
             val tpadSec = key.secondaryLabel
             if (tpadSec != null) {
-                textPaint.textSize = 9f * density
-                textPaint.color = subTextColor
-                val secX = drawRect.right - 5f * density
-                val secY = drawRect.top + drawRect.height() * 0.28f
-                val textWidth = textPaint.measureText(tpadSec)
-                val secCenterX = secX - textWidth / 2f
-                canvas.drawText(tpadSec, secCenterX, secY, textPaint)
+                KeyboardUtils.drawSecondaryLabel(canvas, tpadSec, drawRect, textPaint, subTextColor, density)
             }
         }
     }

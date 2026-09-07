@@ -43,52 +43,6 @@ enum class CompositionMode {
 }
 
 /**
- * Modern Zero-Allocation Event Flow modeled via Sealed Interface.
- */
-sealed interface CompositionResult {
-    /**
-     * Active composing buffer updated with new display text and active span range.
-     */
-    data class Update(
-        val text: CharSequence,
-        val composingRange: IntRange = 0 until text.length
-    ) : CompositionResult
-
-    /**
-     * Syllable is committed and a new character/word is started immediately.
-     */
-    data class CommitAndStartNew(
-        val commitText: String,
-        val newChar: Char
-    ) : CompositionResult
-
-    /**
-     * Key is not consumed by Vietnamese composer and should be passed directly to editor.
-     */
-    data object PassThrough : CompositionResult
-}
-
-/**
- * Zero-allocation result container for processKey. Callers MUST read
- * the result before invoking processKey again.
- */
-class KeyResult {
-    enum class Kind { COMMIT, UPDATE, PASS_THROUGH }
-
-    var kind: Kind = Kind.PASS_THROUGH
-    var commitText: String = ""
-    var separator: Char = ' '
-    var updateText: String = ""
-
-    fun reset(kind: Kind) {
-        this.kind = kind
-        commitText = ""
-        separator = ' '
-        updateText = ""
-    }
-}
-
-/**
  * Engine configuration options.
  */
 data class EngineOptions(

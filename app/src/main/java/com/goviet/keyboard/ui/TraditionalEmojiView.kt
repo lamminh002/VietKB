@@ -187,7 +187,7 @@ class TraditionalEmojiView @JvmOverloads constructor(
             val cellTop = emojiAreaTop + row * colW
             val cellBottom = cellTop + colW
             val cellCenterY = (cellTop + cellBottom) / 2f
-            val baseline = cellCenterY - (textPaint.descent() + textPaint.ascent()) / 2f
+            val baseline = KeyboardUtils.centerBaselineY(cellCenterY, textPaint)
 
             for (col in 0 until 7) {
                 val index = row * 7 + col
@@ -263,7 +263,7 @@ class TraditionalEmojiView @JvmOverloads constructor(
             textPaint.textSize = if (code == "SPACE" || code == "BACKSPACE" || code == "ENTER") 13f * density else 16f * density
             textPaint.textAlign = Paint.Align.CENTER
 
-            val baseline = key.rect.centerY() - (textPaint.descent() + textPaint.ascent()) / 2f
+            val baseline = KeyboardUtils.centerBaselineY(key.rect, textPaint)
             canvas.drawText(label, key.rect.centerX(), baseline, textPaint)
         }
     }

@@ -333,7 +333,7 @@ open class TraditionalSettingsView @JvmOverloads constructor(
         keycapTextPaint.textSize = 9f * density
         keycapTextPaint.typeface = boldTypeface
         keycapTextPaint.textAlign = Paint.Align.CENTER
-        val baseline = rect.centerY() - (keycapTextPaint.descent() + keycapTextPaint.ascent()) / 2f
+        val baseline = KeyboardUtils.centerBaselineY(rect, keycapTextPaint)
         canvas.drawText(letter, rect.centerX(), baseline, keycapTextPaint)
     }
 
@@ -588,7 +588,7 @@ open class TraditionalSettingsView @JvmOverloads constructor(
                         textPaint.textSize = 10.5f * density
                         textPaint.typeface = boldTypeface
                         textPaint.textAlign = Paint.Align.LEFT
-                        val baseline = rect.centerY() - (textPaint.descent() + textPaint.ascent()) / 2f
+                        val baseline = KeyboardUtils.centerBaselineY(rect, textPaint)
                         canvas.drawText(context.getString(themeLabelsResIds[i]), rect.left + 36f * density, baseline, textPaint)
 
                         if (isOptionSelected) {
@@ -642,7 +642,7 @@ open class TraditionalSettingsView @JvmOverloads constructor(
                         textPaint.textSize = 10.5f * density
                         textPaint.typeface = boldTypeface
                         textPaint.textAlign = Paint.Align.LEFT
-                        val baseline = rect.centerY() - (textPaint.descent() + textPaint.ascent()) / 2f
+                        val baseline = KeyboardUtils.centerBaselineY(rect, textPaint)
                         canvas.drawText(context.getString(paddingLabelsResIds[i]), rect.left + 36f * density, baseline, textPaint)
 
                         if (isOptionSelected) {

@@ -53,7 +53,7 @@ object KeyboardLayout {
                     key.label = key.code
                 }
                 else -> {
-                    key.label = if (shiftState > 0) key.code.uppercase() else key.code
+                    key.label = if (shiftState > 0 && key.code.length == 1) key.code[0].uppercaseChar().toString() else key.code
                     key.secondaryLabel = getSecondaryLabel(key.code, shiftState > 0)
                     key.longPressOptions = getLongPressOptions(key.code, shiftState > 0)
                 }
@@ -139,22 +139,22 @@ object KeyboardLayout {
         val row0 = if (!isPage2) {
             listOf("1", "2", "3", "4", "5", "6", "7", "8", "9", "0")
         } else {
-            listOf("\u20AC", "$", "\u00A3", "\u00A5", "\u20A9", "\u00A2", "\u20BD", "\u20B9", "\u00A4", "\u2030")
+            listOf("₫", "€", "$", "£", "¥", "₩", "¢", "₹", "₽", "¤")
         }
         val row1 = if (!isPage2) {
-            listOf("@", "#", "\u20AB", "%", "&", "-", "+", "(", ")", "/")
+            listOf("!", "@", "#", "$", "%", "&", "*", "(", ")", "_")
         } else {
-            listOf("`", "^", "\u00B0", "\u00B1", "\u2212", "\u00D7", "\u00F7", "\u2260", "\u2248", "\u00B7")
+            listOf("±", "−", "×", "÷", "=", "≠", "≈", "≤", "≥", "∞")
         }
         val row2 = if (!isPage2) {
-            listOf("*", "\"", "'", ":", ";", "!", "?", "\\", "|", "~")
+            listOf("+", "=", "-", "<", ">", "/", "\\", "|", "~", "\"")
         } else {
-            listOf("\u2264", "\u2265", "\u221A", "\u221E", "\u03C0", "\u0394", "\u2211", "\u222B", "\u2022", "\u2026")
+            listOf("√", "∑", "∫", "π", "Δ", "•", "…", "©", "®", "™")
         }
         val row3 = if (!isPage2) {
-            listOf("=", "<", ">", "[", "]", "{", "}")
+            listOf("`", ":", ";", "'", "?", ".", "…")
         } else {
-            listOf("\u201C", "\u201D", "\u2018", "\u2019", "\u00AB", "\u00BB", "\u00A9")
+            listOf("°", "℃", "℉", "§", "¶", "↑", "↓")
         }
 
         for (sym in row0) addSymbolKey(keys, sym)
@@ -188,7 +188,6 @@ object KeyboardLayout {
         ))
         keys.add(Key(code = "ENTER", label = "Enter", isSpecialEnter = true, isFunctional = true, weight = 1.4f))
     }
-
     private fun addSymbolKey(keys: MutableList<Key>, sym: String) {
         keys.add(Key(
             code = sym,
@@ -220,11 +219,14 @@ object KeyboardLayout {
 
     private fun getSecondaryLabel(letter: String, isShifted: Boolean): String? {
         val label = secondaryKeyMap[letter] ?: return null
-        return if (isShifted) label.uppercase() else label
+        return if (isShifted && label.length == 1) label[0].uppercaseChar().toString() else label
     }
 
     private fun getLongPressOptions(letter: String, isShifted: Boolean): List<String>? {
         val list = longPressSymbolMap[letter] ?: secondaryKeyMap[letter]?.let { listOf(it) } ?: return null
-        return if (isShifted) list.map { it.uppercase() } else list
+        if (!isShifted) return list
+        val out = ArrayList<String>(list.size)
+        for (s in list) out.add(if (s.length == 1) s[0].uppercaseChar().toString() else s.uppercase())
+        return out
     }
 }

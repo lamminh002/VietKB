@@ -417,7 +417,7 @@ class TraditionalClipboardView @JvmOverloads constructor(
                         textPaint.typeface = boldTypeface
                         textPaint.textAlign = Paint.Align.LEFT
                         val title = item.title.uppercase()
-                        val baseline = (layout.top + layout.bottom) / 2f - (textPaint.descent() + textPaint.ascent()) / 2f
+                        val baseline = KeyboardUtils.centerBaselineY((layout.top + layout.bottom) / 2f, textPaint)
                         canvas.drawText(title, 12f * density, baseline, textPaint)
                     }
                     is DisplayItem.Clipboard -> {
@@ -440,7 +440,7 @@ class TraditionalClipboardView @JvmOverloads constructor(
                             textPaint.color = subTextColor
                             textPaint.textAlign = Paint.Align.LEFT
                             val textX = layout.cardRect.left + 12f * density
-                            val textBaseline = layout.cardRect.centerY() - (textPaint.descent() + textPaint.ascent()) / 2f
+                            val textBaseline = KeyboardUtils.centerBaselineY(layout.cardRect, textPaint)
                             canvas.drawText("Đã xóa mục này", textX, textBaseline, textPaint)
 
                             // Undo button on the right
@@ -461,7 +461,7 @@ class TraditionalClipboardView @JvmOverloads constructor(
                                 
                                 val centerY = layout.cardRect.centerY()
                                 val iconSize = 14f * density
-                                val textBaseline = centerY - (textPaint.descent() + textPaint.ascent()) / 2f
+                                val textBaseline = KeyboardUtils.centerBaselineY(centerY, textPaint)
                                 
                                 if (currentSwipeOffset > 0f) {
                                     // Swipe right: Pin/Unpin (Blue background)
