@@ -490,7 +490,7 @@ class KeyboardRootView @JvmOverloads constructor(
                 }
                 standardLetterGrid.onToggleLanguage = {
                     service._languageMode.value = if (languageMode == "VIE") "ENG" else "VIE"
-                    service.composingRaw.clear()
+                    service.inputProcessor.clearState()
                     service.currentInputConnection?.finishComposingText()
                 }
             }
@@ -547,7 +547,7 @@ class KeyboardRootView @JvmOverloads constructor(
                 }
                 standardLetterGrid.onToggleLanguage = {
                     service._languageMode.value = if (languageMode == "VIE") "ENG" else "VIE"
-                    service.composingRaw.clear()
+                    service.inputProcessor.clearState()
                     service.currentInputConnection?.finishComposingText()
                 }
                 standardLetterGrid.onOpenPopup = { options ->
@@ -1270,7 +1270,7 @@ class UnifiedTopHeaderView(context: Context, private val rootView: KeyboardRootV
             in DrawerButton.ALL.map { it.id } -> {
                 val btn = DrawerButton.ALL.first { it.id == id }
                 if (btn == DrawerButton.LANGUAGE) {
-                    rootView.service.switchToNextInputMethod()
+                    rootView.service.toggleLanguage()
                 } else {
                     rootView.service._keyboardMode.value = DrawerButton.toggleMode(rootView.keyboardMode, btn)
                 }

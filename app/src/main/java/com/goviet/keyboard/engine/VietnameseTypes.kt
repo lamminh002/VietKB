@@ -1,15 +1,16 @@
 package com.goviet.keyboard.engine
 
 /**
- * Vietnamese tones.
+ * Vietnamese tones.  [key] is the Telex key that produces the tone
+ * ('z' clears: [NONE] has no key).
  */
-enum class Tone(val index: Int) {
-    NONE(0),
-    ACUTE(1),  // acute ('s')
-    GRAVE(2),  // grave ('f')
-    HOOK(3),   // hook above ('r')
-    TILDE(4),  // tilde ('x')
-    DOT(5);    // dot below ('j')
+enum class Tone(val index: Int, val key: Char?) {
+    NONE(0, null),
+    ACUTE(1, 's'),  // acute
+    GRAVE(2, 'f'),  // grave
+    HOOK(3, 'r'),   // hook above
+    TILDE(4, 'x'),  // tilde
+    DOT(5, 'j');    // dot below
 
     companion object {
         fun fromKey(c: Char): Tone? = when (c.lowercaseChar()) {
@@ -51,10 +52,3 @@ data class EngineOptions(
     var directW: Boolean = false,
     var oldTonePlacement: Boolean = false
 )
-
-
-enum class TonePlacement {
-    LEGACY,
-    MODERN
-}
-

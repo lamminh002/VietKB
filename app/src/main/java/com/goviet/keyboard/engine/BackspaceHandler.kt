@@ -1,6 +1,5 @@
 package com.goviet.keyboard.engine
 
-import java.text.BreakIterator
 import android.view.KeyEvent
 import android.view.inputmethod.InputConnection
 
@@ -13,71 +12,6 @@ data class WordAtCursor(
     val endInEditor: Int,
     val cursorOffset: Int
 )
-
-// ============================================================
-// GRAPHEME EDITOR (Unicode grapheme cluster manipulation)
-// ============================================================
-object GraphemeEditor {
-
-    private val threadLocalBreakIterator = ThreadLocal.withInitial {
-        BreakIterator.getCharacterInstance()
-    }
-
-    private fun getIterator(text: String): BreakIterator {
-        val iterator = threadLocalBreakIterator.get() ?: BreakIterator.getCharacterInstance()
-        iterator.setText(text)
-        return iterator
-    }
-
-    fun previousBoundary(text: String, cursorIndex: Int): Int {
-        if (text.isEmpty() || cursorIndex <= 0) return 0
-        val clampedCursor = cursorIndex.coerceIn(0, text.length)
-        val prev = getIterator(text).preceding(clampedCursor)
-        return if (prev != BreakIterator.DONE && prev >= 0) prev else 0
-    }
-
-    fun nextBoundary(text: String, cursorIndex: Int): Int {
-        if (text.isEmpty() || cursorIndex >= text.length) return text.length
-        val clampedCursor = cursorIndex.coerceIn(0, text.length)
-        val next = getIterator(text).following(clampedCursor)
-        return if (next != BreakIterator.DONE && next >= 0) next else text.length
-    }
-
-    fun deleteBackward(text: String, cursorIndex: Int): Pair<String, Int> {
-        if (text.isEmpty() || cursorIndex <= 0) return Pair(text, 0)
-        val clampedCursor = cursorIndex.coerceIn(0, text.length)
-        val start = previousBoundary(text, clampedCursor)
-        if (start >= clampedCursor) return Pair(text, clampedCursor)
-        val newLength = text.length - (clampedCursor - start)
-        val sb = StringBuilder(newLength)
-        sb.append(text, 0, start)
-        sb.append(text, clampedCursor, text.length)
-        return Pair(sb.toString(), start)
-    }
-
-    fun deleteForward(text: String, cursorIndex: Int): Pair<String, Int> {
-        if (text.isEmpty() || cursorIndex >= text.length) return Pair(text, cursorIndex.coerceIn(0, text.length))
-        val clampedCursor = cursorIndex.coerceIn(0, text.length)
-        val end = nextBoundary(text, clampedCursor)
-        if (end <= clampedCursor) return Pair(text, clampedCursor)
-        val newLength = text.length - (end - clampedCursor)
-        val sb = StringBuilder(newLength)
-        sb.append(text, 0, clampedCursor)
-        sb.append(text, end, text.length)
-        return Pair(sb.toString(), clampedCursor)
-    }
-
-    fun getBackwardGraphemeLength(text: String, cursorIndex: Int = text.length): Int {
-        if (text.isEmpty() || cursorIndex <= 0) return 0
-        return cursorIndex.coerceIn(0, text.length) - previousBoundary(text, cursorIndex.coerceIn(0, text.length))
-    }
-
-    fun getForwardGraphemeLength(text: String, cursorIndex: Int = 0): Int {
-        if (text.isEmpty() || cursorIndex >= text.length) return 0
-        val clamped = cursorIndex.coerceIn(0, text.length)
-        return nextBoundary(text, clamped) - clamped
-    }
-}
 
 // ============================================================
 // EDITED VIETNAMESE RECOGNIZER — canonical rime-table based
@@ -99,27 +33,17 @@ object EditedVietnameseRecognizer {
         val stripped = VietnameseUnicode.stripToneFromWord(lower)
         if (stripped.isEmpty()) return false
 
-        // Longest valid onset wins (ONSETS is ordered longest-first).
-        var onsetLen = 0
-        for (cand in VietnamesePhonology.ONSETS) {
-            if (stripped.startsWith(cand)) {
-                onsetLen = cand.length
-                break
-            }
-        }
-
+        // Longest valid onset wins — single source: OnsetMap.longestOnsetPrefix.
+        val onsetLen = OnsetMap.longestOnsetPrefix(stripped)
         val rime = stripped.substring(onsetLen)
         if (rime.isEmpty()) return false
 
         // The rime must be a (possibly partial) canonical Vietnamese rime
         // and must contain at least one base vowel.
-        if (!RimeMap.isValidPrefix(RimeMap.hash(rime))) return false
-        return rime.any { VietnamesePhonology.isBaseVowel(it) }
+        if (!RimeMap.isValidPrefix(RimeMap.rimeKey(rime))) return false
+        return rime.any { RimeMap.isBaseVowel(it) }
     }
 
-    fun classify(word: String): CompositionMode {
-        return if (canRecompose(word)) CompositionMode.VIETNAMESE else CompositionMode.LITERAL
-    }
 }
 
 // ============================================================
@@ -146,7 +70,7 @@ class BackspaceHandler(
                 return
             }
 
-            if (controller.composingRaw.isNotEmpty()) {
+            if (controller.inputEngine.isComposing()) {
                 performComposingBackspace(ic)
                 controller.service.evaluateAutoShift()
                 return
@@ -163,14 +87,14 @@ class BackspaceHandler(
             // This keeps the behavior identical regardless of whether the editor
             // reported the caret move through onUpdateSelection.
             controller.adoptPrefixAtCaret(ic)
-            if (controller.composingRaw.isNotEmpty()) {
+            if (controller.inputEngine.isComposing()) {
                 performComposingBackspace(ic)
                 controller.service.evaluateAutoShift()
                 return
             }
 
-            // Committed text, Gboard/Laban style: remove the whole preceding
-            // Unicode grapheme cluster ('á' -> "", 'nguyễn' -> 'nguyễ').
+            // Committed text: remove the whole preceding Unicode grapheme
+            // cluster ('á' -> "", 'nguyễn' -> 'nguyễ').
             deleteLastGraphemeOrChar(ic)
             controller.service.evaluateAutoShift()
         } finally {
@@ -191,7 +115,7 @@ class BackspaceHandler(
                 return
             }
 
-            if (controller.composingRaw.isNotEmpty()) {
+            if (controller.inputEngine.isComposing()) {
                 performComposingDeleteForward(ic)
                 controller.service.evaluateAutoShift()
                 return
@@ -208,7 +132,7 @@ class BackspaceHandler(
         ic.beginBatchEdit()
         try {
             controller.lastExpandedMacro = null
-            if (controller.composingRaw.isNotEmpty()) {
+            if (controller.inputEngine.isComposing()) {
                 // Delete the whole preedit (swipe/word-delete), then clear composing UI.
                 val lastLen = controller.lastSetComposingText?.length ?: 0
                 controller.resetComposingUI(ic, lastLen)
@@ -298,29 +222,24 @@ class BackspaceHandler(
             return
         }
 
-        val adopt = controller.inputEngine.adoptWord(display)
-        val useVietnamese = adopt != null && adopt.isValid &&
-                controller.compileText(adopt.canonicalRaw) == display
-        val canonical = if (useVietnamese) adopt!!.canonicalRaw else display
+        val canonical = controller.inputEngine.adoptRoundTrip(display)
+        val useVietnamese = canonical != null
 
-        val raw = controller.composingRaw
-        raw.clear()
-        raw.append(canonical)
-
-        if (useVietnamese) {
-            controller.inputEngine.replayRawToState(canonical, controller.composingState)
-        } else {
-            controller.composingState.reset()
-            controller.composingState.rawSuffix = canonical
-        }
-        controller.isVietnamese = useVietnamese
+        controller.inputEngine.composeAsVietnamese = useVietnamese
+        controller.inputEngine.setComposingRaw(canonical ?: display)
         controller.composingCursorIndex = controller.rawIndexOfDisplay(
-            canonical, display, caretInDisplay, useVietnamese
+            canonical ?: display, display, caretInDisplay, useVietnamese
         )
 
         replaceComposingText(ic, display)
-        if (caretInDisplay < display.length && controller.composingStartInEditor >= 0) {
-            controller.moveCursorTo(ic, controller.composingStartInEditor + caretInDisplay)
+        if (controller.composingStartInEditor >= 0) {
+            if (caretInDisplay < display.length) {
+                controller.moveCursorTo(ic, controller.composingStartInEditor + caretInDisplay)
+            } else {
+                // setComposingText(..., 1) leaves the caret at the end of the preedit;
+                // register it so the editor's reflection is consumed as ours.
+                controller.registerCaretAsOurs(controller.composingStartInEditor + display.length)
+            }
         }
     }
 
@@ -359,10 +278,9 @@ class BackspaceHandler(
         controller.lastExpandedMacro = null
         deleteBefore(ic, macro.expandedText.length)
         // Replay the macro trigger through the same raw recompiler.
-        controller.composingRaw.clear()
-        controller.composingRaw.append(macro.trigger)
+        controller.inputEngine.composeAsVietnamese = true
+        controller.inputEngine.setComposingRaw(macro.trigger)
         controller.composingCursorIndex = macro.trigger.length
-        controller.isVietnamese = true
         replaceComposingText(ic, controller.compileRawDisplay())
         return true
     }

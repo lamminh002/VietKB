@@ -6,57 +6,64 @@ package com.goviet.keyboard.engine
  */
 object VietnameseUnicode {
 
-    fun applyTone(char: Char, tone: Tone): Char {
-        if (tone == Tone.NONE) return stripTone(char)
-        val isUpper = char.isUpperCase()
-        val base = char.lowercaseChar()
-        val result = when (base) {
-            'a' -> when (tone) { Tone.ACUTE -> 'á'; Tone.GRAVE -> 'à'; Tone.HOOK -> 'ả'; Tone.TILDE -> 'ã'; Tone.DOT -> 'ạ'; else -> 'a' }
-            'ă' -> when (tone) { Tone.ACUTE -> 'ắ'; Tone.GRAVE -> 'ằ'; Tone.HOOK -> 'ẳ'; Tone.TILDE -> 'ẵ'; Tone.DOT -> 'ặ'; else -> 'ă' }
-            'â' -> when (tone) { Tone.ACUTE -> 'ấ'; Tone.GRAVE -> 'ầ'; Tone.HOOK -> 'ẩ'; Tone.TILDE -> 'ẫ'; Tone.DOT -> 'ậ'; else -> 'â' }
-            'e' -> when (tone) { Tone.ACUTE -> 'é'; Tone.GRAVE -> 'è'; Tone.HOOK -> 'ẻ'; Tone.TILDE -> 'ẽ'; Tone.DOT -> 'ẹ'; else -> 'e' }
-            'ê' -> when (tone) { Tone.ACUTE -> 'ế'; Tone.GRAVE -> 'ề'; Tone.HOOK -> 'ể'; Tone.TILDE -> 'ễ'; Tone.DOT -> 'ệ'; else -> 'ê' }
-            'i' -> when (tone) { Tone.ACUTE -> 'í'; Tone.GRAVE -> 'ì'; Tone.HOOK -> 'ỉ'; Tone.TILDE -> 'ĩ'; Tone.DOT -> 'ị'; else -> 'i' }
-            'o' -> when (tone) { Tone.ACUTE -> 'ó'; Tone.GRAVE -> 'ò'; Tone.HOOK -> 'ỏ'; Tone.TILDE -> 'õ'; Tone.DOT -> 'ọ'; else -> 'o' }
-            'ô' -> when (tone) { Tone.ACUTE -> 'ố'; Tone.GRAVE -> 'ồ'; Tone.HOOK -> 'ổ'; Tone.TILDE -> 'ỗ'; Tone.DOT -> 'ộ'; else -> 'ô' }
-            'ơ' -> when (tone) { Tone.ACUTE -> 'ớ'; Tone.GRAVE -> 'ờ'; Tone.HOOK -> 'ở'; Tone.TILDE -> 'ỡ'; Tone.DOT -> 'ợ'; else -> 'ơ' }
-            'u' -> when (tone) { Tone.ACUTE -> 'ú'; Tone.GRAVE -> 'ù'; Tone.HOOK -> 'ủ'; Tone.TILDE -> 'ũ'; Tone.DOT -> 'ụ'; else -> 'u' }
-            'ư' -> when (tone) { Tone.ACUTE -> 'ứ'; Tone.GRAVE -> 'ừ'; Tone.HOOK -> 'ử'; Tone.TILDE -> 'ữ'; Tone.DOT -> 'ự'; else -> 'ư' }
-            'y' -> when (tone) { Tone.ACUTE -> 'ý'; Tone.GRAVE -> 'ỳ'; Tone.HOOK -> 'ỷ'; Tone.TILDE -> 'ỹ'; Tone.DOT -> 'ỵ'; else -> 'y' }
-            else -> char
+    // ── Tone tables ────────────────────────────────────────────────
+    // One row per base vowel, in tone order NONE, ACUTE, GRAVE, HOOK,
+    // TILDE, DOT (aligned with Tone.index).  Every Vietnamese toned vowel
+    // is below U+1F00, so a 0x2000-entry table covers all of them.
+    private val TONE_ROWS = arrayOf(
+        "aáàảãạ", "ăắằẳẵặ", "âấầẩẫậ",
+        "eéèẻẽẹ", "êếềểễệ", "iíìỉĩị",
+        "oóòỏõọ", "ôốồổỗộ", "ơớờởỡợ",
+        "uúùủũụ", "ưứừửữự", "yýỳỷỹỵ"
+    )
+
+    private const val TONE_COUNT = 6
+    private const val TABLE_LIMIT = 0x2000
+
+    /** Toned vowel → base vowel (identity for every other char). */
+    private val STRIP_TONE = CharArray(TABLE_LIMIT) { it.toChar() }.apply {
+        for (row in TONE_ROWS) {
+            val base = row[0]
+            val upper = base.uppercaseChar()
+            for (t in 1 until row.length) {
+                this[row[t].code] = base
+                this[row[t].uppercaseChar().code] = upper
+            }
         }
-        return if (isUpper) result.uppercaseChar() else result
+    }
+
+    /** Base vowel → row index in [TONE_ROWS]; -1 for non-bases. */
+    private val BASE_INDEX = ByteArray(TABLE_LIMIT) { -1 }.apply {
+        for (i in TONE_ROWS.indices) {
+            this[TONE_ROWS[i][0].code] = i.toByte()
+            this[TONE_ROWS[i][0].uppercaseChar().code] = i.toByte()
+        }
+    }
+
+    /** [TONED] / [TONED_UPPER] index = row * [TONE_COUNT] + tone.index. */
+    private val TONED = buildToneTable(upper = false)
+    private val TONED_UPPER = buildToneTable(upper = true)
+
+    private fun buildToneTable(upper: Boolean): CharArray = CharArray(TONE_ROWS.size * TONE_COUNT) { i ->
+        val c = TONE_ROWS[i / TONE_COUNT][i % TONE_COUNT]
+        if (upper) c.uppercaseChar() else c
+    }
+
+    fun applyTone(char: Char, tone: Tone): Char {
+        val code = char.code
+        if (code < TABLE_LIMIT) {
+            val base = BASE_INDEX[code]
+            if (base >= 0) {
+                val i = base * TONE_COUNT + tone.index
+                return if (char.isUpperCase()) TONED_UPPER[i] else TONED[i]
+            }
+        }
+        return if (tone == Tone.NONE) stripTone(char) else char
     }
 
     fun stripTone(char: Char): Char {
-        return when (char) {
-            'á', 'à', 'ả', 'ã', 'ạ' -> 'a'
-            'ắ', 'ằ', 'ẳ', 'ẵ', 'ặ' -> 'ă'
-            'ấ', 'ầ', 'ẩ', 'ẫ', 'ậ' -> 'â'
-            'é', 'è', 'ẻ', 'ẽ', 'ẹ' -> 'e'
-            'ế', 'ề', 'ể', 'ễ', 'ệ' -> 'ê'
-            'í', 'ì', 'ỉ', 'ĩ', 'ị' -> 'i'
-            'ó', 'ò', 'ỏ', 'õ', 'ọ' -> 'o'
-            'ố', 'ồ', 'ổ', 'ỗ', 'ộ' -> 'ô'
-            'ớ', 'ờ', 'ở', 'ỡ', 'ợ' -> 'ơ'
-            'ú', 'ù', 'ủ', 'ũ', 'ụ' -> 'u'
-            'ứ', 'ừ', 'ử', 'ữ', 'ự' -> 'ư'
-            'ý', 'ỳ', 'ỷ', 'ỹ', 'ỵ' -> 'y'
-
-            'Á', 'À', 'Ả', 'Ã', 'Ạ' -> 'A'
-            'Ắ', 'Ằ', 'Ẳ', 'Ẵ', 'Ặ' -> 'Ă'
-            'Ấ', 'Ầ', 'Ẩ', 'Ẫ', 'Ậ' -> 'Â'
-            'É', 'È', 'Ẻ', 'Ẽ', 'Ẹ' -> 'E'
-            'Ế', 'Ề', 'Ể', 'Ễ', 'Ệ' -> 'Ê'
-            'Í', 'Ì', 'Ỉ', 'Ĩ', 'Ị' -> 'I'
-            'Ó', 'Ò', 'Ỏ', 'Õ', 'Ọ' -> 'O'
-            'Ố', 'Ồ', 'Ổ', 'Ỗ', 'Ộ' -> 'Ô'
-            'Ớ', 'Ờ', 'Ở', 'Ỡ', 'Ợ' -> 'Ơ'
-            'Ú', 'Ù', 'Ủ', 'Ũ', 'Ụ' -> 'U'
-            'Ứ', 'Ừ', 'Ử', 'Ữ', 'Ự' -> 'Ư'
-            'Ý', 'Ỳ', 'Ỷ', 'Ỹ', 'Ỵ' -> 'Y'
-            else -> char
-        }
+        val code = char.code
+        return if (code < TABLE_LIMIT) STRIP_TONE[code] else char
     }
 
     fun stripDiacritics(char: Char): Char {
@@ -73,6 +80,19 @@ object VietnameseUnicode {
             'Đ' -> 'D'
             else -> stripTone(char)
         }
+    }
+
+    /**
+     * Inverse of [applyTone] — the tone that produced [char], or NONE when the
+     * char carries no tone.  Single source: the [applyTone] table.
+     */
+    fun toneOf(char: Char): Tone {
+        val base = stripTone(char)
+        if (base == char) return Tone.NONE
+        for (t in Tone.values()) {
+            if (t != Tone.NONE && applyTone(base, t) == char) return t
+        }
+        return Tone.NONE
     }
 
     fun stripToneFromWord(word: String): String {

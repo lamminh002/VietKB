@@ -5,14 +5,12 @@ import com.goviet.core.AppPreferences
 import com.goviet.core.EngineConfig
 
 /**
- * VietnameseComposer:
- * Full Telex transformation algorithm implementation:
- * - Target letter principle
- * - Buffer state re-derivation
- * - Asymmetric toggle / untoggle handling
- * - Cross-syllable d/đ transformation
- * - Auto completion and promotion of uơ / ươ
- * - Never unilaterally revert to raw text
+ * VietnameseComposer — Single-resegment Telex engine.
+ *
+ * All syllable segmentation is derived by the single `resegment` function.
+ * The instance owns the composing preedit buffer and derives the display from
+ * it through the session API below; the IME controller never keeps a second
+ * copy of the composing state.
  */
 class VietnameseComposer(var options: EngineOptions = EngineOptions()) {
 
@@ -35,59 +33,35 @@ class VietnameseComposer(var options: EngineOptions = EngineOptions()) {
         get() = options.oldTonePlacement
         set(v) { options.oldTonePlacement = v }
 
-    enum class TargetType {
-        D_ONSET,
-        E_NUCLEUS,
-        O_NUCLEUS,
-        A_NUCLEUS,
-        W_NUCLEUS,
-        W_SOLO
-    }
-
-    data class LastToggle(
-        val key: Char,
-        val targetType: TargetType,
-        val hadCharsAfter: Boolean
-    )
+    // ── Data types ─────────────────────────────────────────────────
 
     class SyllableState(
         var onset: String = "",
-        var nucleus: String = "",       // P: vowel nucleus (including offglides i, y, u, o)
-        var coda: String = "",          // True final consonant coda: c, t, n, p, m, ng, ch, nh
+        var nucleus: String = "",
+        var coda: String = "",
         var tone: Tone = Tone.NONE,
-        var lastToggle: LastToggle? = null,
-        var lastUntoggledToneKey: Char? = null,
-        var rawSuffix: String = ""      // Trailing invalid characters, preserved without revert
+        var rawSuffix: String = ""
     ) {
+        /** Per-state render scratch — avoids allocating an OwnedBuffer per display. */
+        private val displayScratch = OwnedBuffer()
+
         fun reset() {
             onset = ""
             nucleus = ""
             coda = ""
             tone = Tone.NONE
-            lastToggle = null
-            lastUntoggledToneKey = null
             rawSuffix = ""
         }
-
         fun isEmpty(): Boolean = onset.isEmpty() && nucleus.isEmpty() && coda.isEmpty() && rawSuffix.isEmpty()
 
-        /** Single String allocation — delegates to zero-alloc buffer. */
         fun toDisplayString(oldTonePlacement: Boolean = false): String {
-            val buf = OwnedBuffer()
-            toDisplayBuffer(buf, oldTonePlacement)
-            return buf.toStringVal()
+            toDisplayBuffer(displayScratch, oldTonePlacement)
+            return displayScratch.toStringVal()
         }
 
-        /**
-         * Write display text directly to an OwnedBuffer. Zero allocation.
-         * Used in feedChar hot path to avoid String creation.
-         */
         fun toDisplayBuffer(out: OwnedBuffer, oldTonePlacement: Boolean = false) {
             out.clear()
             if (isEmpty()) return
-            val totalLen = onset.length + nucleus.length + coda.length + rawSuffix.length
-            if (totalLen == 0) return
-
             if (tone == Tone.NONE || nucleus.isEmpty()) {
                 for (i in 0 until onset.length) out.append(onset[i])
                 for (i in 0 until nucleus.length) out.append(nucleus[i])
@@ -95,10 +69,13 @@ class VietnameseComposer(var options: EngineOptions = EngineOptions()) {
                 for (i in 0 until rawSuffix.length) out.append(rawSuffix[i])
                 return
             }
-
-            val rimeHash = RimeMap.hashCat(nucleus, nucleus.length, coda, coda.length)
-            val toneIdx = VietnamesePhonology.determineTonePositionHash(rimeHash, oldTonePlacement)
-
+            val rimeKey = RimeMap.keyCat(nucleus, nucleus.length, coda, coda.length)
+            var toneIdx = RimeMap.determineTonePosition(
+                rimeKey, oldTonePlacement, nucleus.length)
+            if (coda.isEmpty() && rawSuffix.isNotEmpty()) {
+                val pending = pendingFoldCodaIndex()
+                if (pending >= 0) toneIdx = pending
+            }
             for (i in 0 until onset.length) out.append(onset[i])
             for (i in 0 until nucleus.length) {
                 if (i == toneIdx) out.append(VietnameseUnicode.applyTone(nucleus[i], tone))
@@ -107,219 +84,765 @@ class VietnameseComposer(var options: EngineOptions = EngineOptions()) {
             for (i in 0 until coda.length) out.append(coda[i])
             for (i in 0 until rawSuffix.length) out.append(rawSuffix[i])
         }
-    }
 
-
-    /**
-     * Single source of truth: pure re-derivation from the raw keystroke buffer.
-     * The engine keeps no persistent syllable state — every call replays the raw
-     * keystrokes through the spelling kernel, so display and commit are always
-     * derived by the exact same function and can never diverge.
-     */
-    private val replayState = SyllableState()
-    private val replayOut = StepOut()
-    private val stringOut = OwnedBuffer()
-
-    fun reset() {
-        replayState.reset()
-    }
-
-    /**
-     * Pure recompile: replay [raw] through the spelling kernel and write the
-     * display into [out]. Zero extra allocation in the hot path — pooled states
-     * are reused, and callers materialize a String only when the IME API needs it.
-     */
-
-    // ============================================================
-    // PUBLIC KEY FEED — for live composing (state-based, no replay)
-    // ============================================================
-
-    /**
-     * Feed a single keystroke into [state] (incremental, no replay).
-     * Returns true if the key was handled by the Vietnamese spelling kernel.
-     * Backspace never needs a snapshot: it mutates the caller's raw buffer and
-     * re-derives the state with [replayRawToState].
-     */
-    fun feedKey(state: SyllableState, key: Char): Boolean {
-        return applyKey(state, key, isStaticReDerive = false)
-    }
-
-    /**
-     * Replay [raw] keystrokes into [state] from scratch. Used when adopting
-     * a committed word (e.g. after space+backspace) and when re-deriving the
-     * live state after a composing backspace/delete edit, so the display and
-     * the next keystrokes always agree with the raw buffer.
-     */
-    fun replayRawToState(raw: CharSequence, state: SyllableState) {
-        state.reset()
-        for (i in 0 until raw.length) {
-            applyKey(state, raw[i], isStaticReDerive = false)
-        }
-    }
-
-        fun compileRaw(raw: CharSequence, vietnamese: Boolean, out: OwnedBuffer) {
-        out.clear()
-        val rawLen = raw.length
-        if (rawLen == 0) return
-        if (!vietnamese || !vietnameseModeEnabled) {
-            out.append(raw)
-            return
-        }
-        replayState.reset()
-        for (i in 0 until rawLen) {
-            when (feedChar(replayState, raw[i], true, isStaticReDerive = false, out = replayOut)) {
-                CoreStep.BOUNDARY -> {
-                    out.append(replayOut.committedBuffer)
-                    out.append(replayOut.separator)
+        /**
+         * When a tone is set but the following consonant was rejected as a coda
+         * (the current nucleus cannot host it — e.g. "ua" + "n"), the tone mark
+         * stays on the first vowel even though the pending fold would move it.
+         * If a Telex fold key could turn this tail into a valid coda (ua + n ->
+         * uâ + n via 'a'), anchor the mark on the last nucleus vowel instead:
+         * churan -> chuản, then churana -> chuẩn.
+         */
+        private fun pendingFoldCodaIndex(): Int {
+            if (nucleus.isEmpty() || coda.isNotEmpty() || rawSuffix.isEmpty()) return -1
+            val c0 = rawSuffix[0].lowercaseChar()
+            if (c0 != 'm' && c0 != 'p' && c0 != 'n' && c0 != 't' && c0 != 'c') return -1
+            val key = RimeMap.rimeKey(nucleus)
+            for (fk in charArrayOf('e', 'o', 'a', 'w')) {
+                if (RimeMap.foldCodaValid(nucleus, key, fk, c0) != null) {
+                    return (nucleus.length - 1).coerceAtLeast(0)
                 }
-                CoreStep.MUTATION -> { /* display updated by the kernel */ }
             }
+            return -1
         }
-        replayState.toDisplayBuffer(out, options.oldTonePlacement)
     }
 
-        /** Compile with a maximum character limit — avoids substring allocation. */
-        fun compileRaw(raw: CharSequence, vietnamese: Boolean, out: OwnedBuffer, maxLen: Int) {
-        out.clear()
-        val rawLen = maxLen.coerceAtMost(raw.length)
-        if (rawLen == 0) return
-        if (!vietnamese || !vietnameseModeEnabled) {
-            out.append(raw, 0, rawLen)
-            return
-        }
-        replayState.reset()
-        for (i in 0 until rawLen) {
-            when (feedChar(replayState, raw[i], true, isStaticReDerive = false, out = replayOut)) {
-                CoreStep.BOUNDARY -> {
-                    out.append(replayOut.committedBuffer)
-                    out.append(replayOut.separator)
-                }
-                CoreStep.MUTATION -> { /* display updated by the kernel */ }
-            }
-        }
-        replayState.toDisplayBuffer(out, options.oldTonePlacement)
-    }
-
-    private enum class CoreStep { BOUNDARY, MUTATION }
-
-    private class StepOut {
-        val committedBuffer = OwnedBuffer()
-        var separator: Char = ' '
-        val displayBuffer = OwnedBuffer()
-    }
-
-    private fun feedChar(
-        state: SyllableState,
-        c: Char,
-        vietnamese: Boolean = true,
-        isStaticReDerive: Boolean = false,
-        out: StepOut
-    ): CoreStep {
-        if (isBoundaryKey(c)) {
-            out.committedBuffer.clear()
-            state.toDisplayBuffer(out.committedBuffer, options.oldTonePlacement)
-            out.separator = c
-            state.reset()
-            return CoreStep.BOUNDARY
-        }
-
-        if (!vietnamese) {
-            state.rawSuffix += c
-            out.displayBuffer.clear()
-            state.toDisplayBuffer(out.displayBuffer, options.oldTonePlacement)
-            return CoreStep.MUTATION
-        }
-
-        applyKey(state, c, isStaticReDerive = isStaticReDerive)
-        out.displayBuffer.clear()
-        state.toDisplayBuffer(out.displayBuffer, options.oldTonePlacement)
-        return CoreStep.MUTATION
-    }
-
-
-    private val foldResult = VietnamesePhonology.FoldResult()
-
-
-    /**
-     * Result of word adoption — contains all info needed by the Controller.
-     */
     data class AdoptResult(
         val isValid: Boolean,
         val onsetLength: Int,
         val canonicalRaw: String
     )
 
+    sealed class CompositionResult {
+        abstract val text: CharSequence
+        data class Update(override val text: CharSequence) : CompositionResult()
+        data class CommitAndStartNew(val commitText: String, val newChar: Char) : CompositionResult() {
+            override val text: CharSequence get() = commitText
+        }
+    }
+
+    // ── Shared pools ───────────────────────────────────────────────
+    private val replayState = SyllableState()
+    private val stringOut = OwnedBuffer()
+
+    /** Test API: internal buffer + state for processKey. */
+    private val processRaw = StringBuilder()
+    private val processState = SyllableState()
+
+    fun reset() {
+        replayState.reset()
+        processRaw.clear()
+        processState.reset()
+        composeAsVietnamese = true
+    }
+    /** composeAsVietnamese flag — used by tests to switch Vietnamese/Literal mode. */
+    var composeAsVietnamese: Boolean = true
+
+    /** Display string of the current interactive state. */
+    fun toDisplayString(): String =
+        processState.toDisplayString(options.oldTonePlacement)
+
     /**
-     * Adopt a word: parse display text into syllable components and generate canonical raw keystrokes.
-     * Returns null if word is empty, or AdoptResult with all needed info.
+     * Generate deconstructed snapshots: adopt [word], replay keystroke by keystroke,
+     * return (canonicalRaw, snapshots).
      */
+    fun generateDeconstructedSnapshots(word: String): Pair<String, List<Snapshot>> {
+        val adopt = adoptWord(word) ?: return Pair(word, listOf(Snapshot(word)))
+        val canonical = adopt.canonicalRaw
+        val snaps = mutableListOf<Snapshot>()
+        val tempState = SyllableState()
+        for (i in 0 until canonical.length) {
+            resegment(canonical.subSequence(0, i + 1), tempState)
+            snaps.add(Snapshot(tempState.toDisplayString(options.oldTonePlacement)))
+        }
+        return Pair(canonical, snaps)
+    }
+
+    data class Snapshot(val displayText: String)
+
+
+    // ================================================================
+    // CORE: resegment — single source of truth
+    // ================================================================
+
+    /**
+     * Lookahead in raw: collect consonant chars from [from] that could form
+     * a coda (stopping at non-consonant or end of string).
+     * Used by fold rules to predict the coda before deciding fold variant.
+     */
+    private fun predictConsonantTail(raw: CharSequence, from: Int): String {
+        var i = from
+        var tailStart = -1
+        var tailEnd = -1
+        while (i < raw.length) {
+            val c = raw[i].lowercaseChar()
+            // Skip tone keys when predicting coda: in Telex the tone letter
+            // (s/f/r/x/j/z) precedes the coda consonants in the raw stream
+            // (e.g. "thuowrng" → tone r before coda ng).  Without this skip
+            // the lookahead stops at the tone key and misses the coda, causing
+            // w-fold to pick the open form "uơ" instead of the closed "ươ".
+            if (isToneKey(c)) { i++; continue }
+            if (RimeMap.isFoldKey(c)) { i++; continue }
+            if (OnsetMap.isConsonant(c)) {
+                if (tailStart < 0) tailStart = i
+                tailEnd = i + 1
+                i++
+            } else break
+        }
+        return if (tailStart >= 0) raw.subSequence(tailStart, tailEnd).toString() else ""
+    }
+
+    /**
+     * Collect vowels immediately after [from] that would extend the nucleus
+     * (plain vowels a/e/i/o/u/y + horned â/ô/ơ/ư). Used by the dual-variant
+     * w-fold to validate the fold result against the nucleus extension that
+     * will follow, so the correct variant is chosen even when both are valid
+     * standalone.
+     */
+    private fun predictVowelTail(raw: CharSequence, from: Int): String {
+        val sb = StringBuilder()
+        var i = from
+        while (i < raw.length) {
+            val c = raw[i].lowercaseChar()
+            if (RimeMap.isBaseVowel(c)) { sb.append(c); i++ }
+            else break
+        }
+        return sb.toString()
+    }
+
+    /**
+     * Pipeline entry — single source of truth for syllable composition.
+     *
+     * Phase 1 [matchOnset] consumes the longest valid consonant prefix.
+     * Phase 2 [scanBody] walks the remaining raw keys left-to-right, dispatching
+     * each character to the appropriate handler (tone / modifier / vowel /
+     * coda) and applying folds from the map data.  Phase 3 renders [SyllableState]
+     * to display text (see [SyllableState.toDisplayString]).
+     *
+     * No incremental mutation survives between keystrokes: the controller appends
+     * to the raw buffer and calls resegment again, so every state is derived.
+     */
+    private fun resegment(raw: CharSequence, out: SyllableState) {
+        out.reset()
+        if (raw.isEmpty()) return
+        matchOnset(raw, out)
+        scanBody(raw, out, ScanCtx(if (out.onset.isEmpty()) 0 else OnsetMap.onsetKeyOf(out.onset)))
+    }
+
+    /**
+     * Fold anchor — the single record of the last Telex fold that touched the
+     * nucleus.  Untoggle compares the next key against it; it replaces the old
+     * loose fold-key/nucleus-index/raw-position/standalone fields.
+     */
+    private class FoldAnchor(
+        var key: Char = '\u0000',    // fold key that last modified the nucleus
+        var nucIdx: Int = -1,          // nucleus index where the fold landed
+        var rawPos: Int = -1,          // raw position where the fold was applied
+        var standalone: Boolean = false // a lone w created ư from nothing
+    ) {
+        val active: Boolean get() = key != '\u0000'
+        fun set(key: Char, nucIdx: Int, rawPos: Int, standalone: Boolean = false) {
+            this.key = key; this.nucIdx = nucIdx; this.rawPos = rawPos; this.standalone = standalone
+        }
+        fun clear() { key = '\u0000'; nucIdx = -1; rawPos = -1; standalone = false }
+    }
+
+    /** Per-call scan memory — 6 fields + fold anchor (was 12 loose fields). */
+    private class ScanCtx(
+        var oKey: Int,
+        var nucKey: Int = 0,
+        var rimeKey: Int = 0,
+        var lastToneKey: Char = '\u0000',
+        var syllableLocked: Boolean = false, // once a char is rejected the rest is literal
+        var justUntoggled: Boolean = false,  // prevents immediate re-fold after untoggle
+        var fold: FoldAnchor = FoldAnchor()  // last nucleus fold (untoggle anchor)
+    )
+
+    /**
+     * Phase 1 — longest valid onset prefix.  Single vowels are never onsets; with
+     * directW off a leading 'w' folds instead; "gi" only wins as an onset when a
+     * vowel follows (otherwise its 'i' becomes the nucleus: gif → g + i + f).
+     */
+    private fun matchOnset(raw: CharSequence, out: SyllableState) {
+        val len = raw.length
+        val maxOnset = minOf(3, len)
+        var onsetEnd = 0
+        for (onsetLen in maxOnset downTo 1) {
+            if (OnsetMap.isValidOnset(raw, 0, onsetLen)) {
+                if (onsetLen == 1 && RimeMap.isBaseVowel(raw[0])) continue
+                if (!options.directW && onsetLen == 1 && raw[0].lowercaseChar() == 'w') continue
+                if (onsetLen > 1) {
+                    // Only "gi" (ending in 'i') is ambiguous — there is no standalone 'q' onset.
+                    if (raw[onsetLen - 1].lowercaseChar() == 'i') {
+                        var vowelAfter = false
+                        for (k in onsetLen until len) {
+                            if (RimeMap.isBaseVowel(raw[k])) { vowelAfter = true; break }
+                        }
+                        if (!vowelAfter) continue
+                    }
+                }
+                onsetEnd = onsetLen
+                break
+            }
+        }
+        if (onsetEnd > 0) out.onset = raw.subSequence(0, onsetEnd).toString()
+    }
+
+    /** Append [c] as literal text and hard-lock the rest of the syllable. */
+    private fun lockLiteral(out: SyllableState, ctx: ScanCtx, c: Char) {
+        out.rawSuffix += c
+        ctx.syllableLocked = true
+    }
+
+    /**
+     * Phase 2 — walk the body keys, dispatching by category.  Each handler owns
+     * exactly one branch of the old loop; `ScanCtx` carries the scan memory.
+     */
+    private fun scanBody(raw: CharSequence, out: SyllableState, ctx: ScanCtx) {
+        var pos = out.onset.length
+        val len = raw.length
+        while (pos < len) {
+            val c = raw[pos]
+            val cLow = c.lowercaseChar()
+
+            // 1. Onset fold (d→đ, data-driven via OnsetMap) + untoggle.
+            if (tryOnsetFold(c, cLow, out, ctx)) { pos++; continue }
+
+            // 2. Tone key (s/f/r/x/j/z).
+            if (RimeMap.isToneKey(cLow)) {
+                handleToneKey(c, cLow, out, ctx)
+                pos++; continue
+            }
+
+            // 3. Vowel modifier / fold key (e/o/a/w) — 'w' has its own handler
+            //    so every w-special rule lives in exactly one place.
+            if (cLow == 'e' || cLow == 'o' || cLow == 'a' || cLow == 'w') {
+                pos = if (cLow == 'w') handleWKey(raw, c, pos, out, ctx)
+                      else applyModifierFold(raw, c, cLow, pos, out, ctx)
+                continue
+            }
+
+            // 4. Plain vowel → start or extend the nucleus.
+            if (!ctx.syllableLocked && !OnsetMap.isConsonant(cLow) && RimeMap.isBaseVowel(c)) {
+                if (tryPlainVowel(c, out, ctx)) { pos++; continue }
+            }
+
+            // 5. Consonant → coda (or deferred fold lookahead, or literal).
+            if (!ctx.syllableLocked && OnsetMap.isConsonant(cLow) && out.nucleus.isNotEmpty()) {
+                val consumed = tryCoda(raw, c, cLow, pos, len, out, ctx)
+                if (consumed > 0) { pos += consumed; continue }
+            }
+
+            // 6. Any other char / rejected → literal + hard lock.
+            lockLiteral(out, ctx, c)
+            pos++
+        }
+    }
+
+    /** Onset fold handler — returns true when the key was consumed by d→đ or untoggle. */
+    private fun tryOnsetFold(c: Char, cLow: Char, out: SyllableState, ctx: ScanCtx): Boolean {
+        if (ctx.syllableLocked || out.onset.isEmpty() || !OnsetMap.isRegisteredFoldKey(cLow)) return false
+        val oFold = OnsetMap.foldTarget(ctx.oKey, cLow)
+        if (oFold != 0) {
+            out.onset = OnsetMap.applyFold(out.onset, oFold)
+            ctx.oKey = OnsetMap.onsetKeyOf(out.onset)
+            return true
+        }
+        val ufKey = OnsetMap.foldKeyForTarget(ctx.oKey)
+        if (ufKey != '\u0000' && cLow == ufKey) {
+            out.onset = OnsetMap.unfoldOnset(out.onset, ufKey)
+            ctx.oKey = OnsetMap.onsetKeyOf(out.onset)
+            lockLiteral(out, ctx, c)
+            return true
+        }
+        return false
+    }
+
+    /** Tone handler — applies, clears, or untoggles the tone; locks on rejection. */
+    private fun handleToneKey(c: Char, cLow: Char, out: SyllableState, ctx: ScanCtx) {
+        if (ctx.syllableLocked) {
+            out.rawSuffix += c
+            return
+        }
+        val targetTone = Tone.fromKey(cLow)
+        if (targetTone != null && out.nucleus.isNotEmpty()) {
+            if (out.nucleus.length >= 2) {
+                val n0 = out.nucleus[0].lowercaseChar()
+                val n1 = out.nucleus[1].lowercaseChar()
+                if ((n0 == 'a' && n1 == 'a') || (n0 == 'e' && n1 == 'e')) {
+                    lockLiteral(out, ctx, c)
+                    return
+                }
+            }
+            if (targetTone == Tone.NONE && out.tone == Tone.NONE) {
+                lockLiteral(out, ctx, c)
+                return
+            }
+            if (targetTone == Tone.NONE && out.tone != Tone.NONE) {
+                out.tone = Tone.NONE
+                ctx.lastToneKey = '\u0000'
+                return
+            }
+            if (ctx.lastToneKey != '\u0000' && cLow == ctx.lastToneKey) {
+                if (out.tone != Tone.NONE) {
+                    out.tone = Tone.NONE
+                    ctx.lastToneKey = '\u0000'
+                }
+                lockLiteral(out, ctx, c)
+                return
+            }
+            val rk = ctx.rimeKey
+            if (RimeMap.isRimeKeyValidForTone(rk, targetTone)) {
+                out.tone = targetTone
+                ctx.lastToneKey = cLow
+            } else {
+                lockLiteral(out, ctx, c)
+            }
+            return
+        }
+        lockLiteral(out, ctx, c)
+    }
+
+    /**
+     * 'w'-key handler — every w-special rule lives here (uo-family repeat-literal,
+     * standalone w → ư when directW is off); everything else falls through to the
+     * shared fold path so aw→ă, ow→ơ, uw→ư keep working in both directW modes.
+     */
+    private fun handleWKey(raw: CharSequence, c: Char, pos: Int, out: SyllableState, ctx: ScanCtx): Int {
+        // 'w' after a uo-family w-compound (uơ/ươ): the map says the fold cannot
+        // untoggle, so the repeated key is literal right after the fold key
+        // (uoww → uơw); the ua/oa-family (ưa/oă) untoggle normally below
+        // (huawwei → huawei).
+        if (!ctx.syllableLocked && ctx.fold.key == 'w' && out.nucleus.isNotEmpty() &&
+            RimeMap.foldWRepeatLiteral(RimeMap.foldSlot(ctx.nucKey))) {
+            if (pos > 0 && raw[pos - 1].lowercaseChar() == 'w') {
+                out.rawSuffix += c
+                ctx.syllableLocked = true
+            }
+            ctx.fold.clear()
+            return pos + 1
+        }
+        // Standalone 'w' → ư (sw → sư), only when directW is off.  qu+ư is
+        // rejected by the syllable-prefix map (quw stays literal quw).  A second
+        // 'w' untoggles it through the shared fold path below.
+        if (!options.directW && !ctx.syllableLocked && out.nucleus.isEmpty() &&
+            (out.onset.isEmpty() || out.onset[0].lowercaseChar() != 'w')) {
+            val wChar = if (c.isUpperCase()) 'Ư' else 'ư'
+            val comboOk = out.onset.isEmpty() ||
+                RimeMap.isSyllableDisplayPrefixValid((out.onset + wChar).lowercase())
+            if (comboOk) {
+                out.nucleus = wChar.toString()
+                ctx.nucKey = RimeMap.rimeKey(out.nucleus)
+                ctx.rimeKey = ctx.nucKey
+                ctx.fold.set('w', 0, pos, standalone = true)
+                return pos + 1
+            }
+        }
+        return applyModifierFold(raw, c, 'w', pos, out, ctx)
+    }
+
+    /**
+     * Shared modifier machinery — untoggle-first fold, vowel combination, plain
+     * extend, literal fallback.  Always consumes the key (returns new pos).
+     */
+    private fun applyModifierFold(raw: CharSequence, c: Char, cLow: Char, pos: Int, out: SyllableState, ctx: ScanCtx): Int {
+        // Untoggle FIRST: pressing the same fold key again on the same position
+        // releases the fold as literal (not a second fold: ơ→o + release w).
+        if (!ctx.syllableLocked && RimeMap.isFoldKey(cLow) && out.nucleus.isNotEmpty() && !ctx.justUntoggled) {
+            if (ctx.fold.active && cLow == ctx.fold.key &&
+                pos == ctx.fold.rawPos + 1 &&
+                ctx.fold.nucIdx >= 0 && ctx.fold.nucIdx < out.nucleus.length &&
+                out.nucleus[ctx.fold.nucIdx] != RimeMap.plainOf(out.nucleus[ctx.fold.nucIdx])) {
+                if (ctx.fold.standalone) {
+                    out.nucleus = ""
+                    out.rawSuffix += c
+                    ctx.syllableLocked = true
+                } else {
+                    val sb = StringBuilder(out.nucleus)
+                    sb[ctx.fold.nucIdx] = RimeMap.plainOf(out.nucleus[ctx.fold.nucIdx])
+                    out.nucleus = sb.toString()
+                    if (out.coda.isNotEmpty()) {
+                        // Coda present: the released fold key cannot re-join the
+                        // nucleus — it becomes literal text (banaan → banan).
+                        out.rawSuffix += c
+                        ctx.syllableLocked = true
+                    } else {
+                        out.nucleus += c
+                    }
+                }
+                ctx.fold.clear()
+                ctx.nucKey = if (out.nucleus.isEmpty()) 0 else RimeMap.rimeKey(out.nucleus)
+                ctx.rimeKey = ctx.nucKey
+                ctx.justUntoggled = true
+                return pos + 1
+            }
+            val foldIdx = applyFoldRules(c, ctx.nucKey, pos, raw, out)
+            if (foldIdx >= 0) {
+                ctx.fold.set(cLow, foldIdx, pos)
+                ctx.nucKey = RimeMap.rimeKey(out.nucleus)
+                ctx.rimeKey = RimeMap.keyCat(out.nucleus, out.nucleus.length, out.coda, out.coda.length)
+                ctx.justUntoggled = false
+                return pos + 1
+            }
+        }
+        // Vowel combination (ua + o → uô etc., from the map).
+        if (!ctx.syllableLocked && out.nucleus.isNotEmpty() && cLow != 'w') {
+            val combo = RimeMap.combineNucleus(out.nucleus, c)
+            if (combo != null) {
+                out.nucleus = combo
+                ctx.nucKey = RimeMap.rimeKey(out.nucleus)
+                ctx.rimeKey = RimeMap.keyCat(out.nucleus, out.nucleus.length, out.coda, out.coda.length)
+                return pos + 1
+            }
+        }
+        // Plain vowel → extend the nucleus while syllable is unlocked.
+        if (!ctx.syllableLocked && out.coda.isEmpty()) {
+            val candidateKey = RimeMap.extendKeySingle(ctx.nucKey, c)
+            if (RimeMap.isValidPrefix(candidateKey)) {
+                out.nucleus += c
+                ctx.nucKey = candidateKey
+                ctx.rimeKey = ctx.nucKey
+                ctx.fold.clear()
+                return pos + 1
+            }
+        }
+        ctx.justUntoggled = false
+        lockLiteral(out, ctx, c)
+        return pos + 1
+    }
+
+    /** Plain vowel → start a nucleus or extend it; false falls through to literal. */
+    private fun tryPlainVowel(c: Char, out: SyllableState, ctx: ScanCtx): Boolean {
+        if (out.nucleus.isEmpty()) {
+            out.nucleus = c.toString()
+            ctx.nucKey = RimeMap.rimeKey(out.nucleus)
+            ctx.rimeKey = ctx.nucKey
+            ctx.justUntoggled = false
+            return true
+        }
+        if (out.coda.isEmpty()) {
+            val candidateKey = RimeMap.extendKeySingle(ctx.nucKey, c)
+            if (RimeMap.isValidPrefix(candidateKey)) {
+                out.nucleus += c
+                ctx.nucKey = candidateKey
+                ctx.rimeKey = ctx.nucKey
+                return true
+            }
+        }
+        return false
+    }
+
+    /**
+     * Consonant → coda via the flat map; on rejection, deferred-fold lookahead may
+     * pre-apply a fold that makes this coda valid (tuana → tuân, chuanra → chuẩn).
+     * Returns chars consumed (1 literal / coda, 2 fold lookahead, 3 tone+fold), or
+     * 0 when the caller's guard didn't match (rare — handled by literal fallback).
+     */
+    private fun tryCoda(raw: CharSequence, c: Char, cLow: Char, pos: Int, len: Int, out: SyllableState, ctx: ScanCtx): Int {
+        val codaLen = out.coda.length
+        val codaOk = codaLen < 2
+        if (codaOk) {
+            val rk = RimeMap.extendKeySingle(ctx.rimeKey, c)
+            if (RimeMap.isValidPrefixWithTone(rk, out.tone.index)) {
+                out.coda += c
+                ctx.rimeKey = rk
+                return 1
+            }
+            if (out.coda.isEmpty() && pos + 1 < len) {
+                val nextChar = raw[pos + 1].lowercaseChar()
+                if (RimeMap.isFoldKey(nextChar)) {
+                    val foldedNuc = RimeMap.foldCodaValid(out.nucleus, ctx.nucKey, nextChar, c, out.tone.index)
+                    if (foldedNuc != null) {
+                        out.nucleus = foldedNuc
+                        ctx.nucKey = RimeMap.rimeKey(out.nucleus)
+                        ctx.fold.key = nextChar
+                        ctx.fold.rawPos = pos + 1
+                        out.coda += c
+                        ctx.rimeKey = RimeMap.extendKeySingle(ctx.nucKey, c)
+                        return 2  // skip coda char + fold key
+                    }
+                }
+                // Deferred fold after a tone key: coda is rejected now but valid once
+                // a later fold key transforms the nucleus (chuanra → chuẩn).
+                if (!ctx.syllableLocked && pos + 2 < len && RimeMap.isToneKey(raw[pos + 1].lowercaseChar())) {
+                    val toneKey = raw[pos + 1].lowercaseChar()
+                    val foldKey = raw[pos + 2].lowercaseChar()
+                    if (RimeMap.isFoldKey(foldKey)) {
+                        val targetTone = Tone.fromKey(toneKey)
+                        if (targetTone != null && targetTone != Tone.NONE) {
+                            val foldedNuc = RimeMap.foldCodaValid(out.nucleus, ctx.nucKey, foldKey, c, targetTone.index)
+                            if (foldedNuc != null) {
+                                out.nucleus = foldedNuc
+                                ctx.nucKey = RimeMap.rimeKey(out.nucleus)
+                                ctx.fold.key = foldKey
+                                ctx.fold.rawPos = pos + 2
+                                out.coda += c
+                                ctx.rimeKey = RimeMap.extendKeySingle(ctx.nucKey, c)
+                                out.tone = targetTone
+                                ctx.lastToneKey = toneKey
+                                return 3  // skip coda char + tone key + fold key
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        // Not a valid coda → literal + hard lock.
+        lockLiteral(out, ctx, c)
+        return 1
+    }
+
+    /**
+     * Apply the Telex fold for [c] by reading the fold-target data baked into
+     * [RimeMap] for the current nucleus — no per-rule if/else, no hardcoded
+     * vowel-pair comparisons.  Returns the nucleus index where the fold landed
+     * (untoggle anchor), or -1 when no fold applies.
+     */
+    private fun applyFoldRules(c: Char, nucKey: Int, rawPos: Int, raw: CharSequence, out: SyllableState): Int {
+        val nuc = out.nucleus
+        val slot = RimeMap.foldSlot(nucKey)
+        if (slot < 0) return -1
+        val primary = RimeMap.foldPrimaryAtSlot(slot, c)
+        if (primary == 0) return -1
+        val alt = if (c == 'w') RimeMap.foldWAlt(slot) else 0
+
+        if (alt == 0) {
+            // Single-target fold (a→â, e→ê, o→ô, w singles, ua→ưa, oa→oă):
+            // validate against the current coda, plus the predicted tail when
+            // the map says this fold is lookahead-sensitive.
+            val newNuc = RimeMap.applyFold(nuc, primary)
+            var ok = isValidRime(newNuc, out.coda)
+            if (!ok && RimeMap.foldWPrimaryLookahead(slot)) {
+                val tail = predictConsonantTail(raw, rawPos + 1)
+                if (tail.isNotEmpty()) ok = isValidRime(newNuc, out.coda + tail)
+            }
+            if (!ok) return -1
+            out.nucleus = newNuc
+            return RimeMap.foldPos(primary)
+        }
+
+        // Dual-variant w-compound (uo/uô → uơ/ươ): both candidates come from
+        // the map; pick the one whose rime — including the predicted coda tail —
+        // validates via RimeMap.  Tie-break (both open rimes valid) by onset:
+        // the open "uơ" form only exists after the onsets listed in OnsetMap.
+        val tail = predictConsonantTail(raw, rawPos + 1)
+        val primNuc = RimeMap.applyFold(nuc, primary)
+        val altNuc = RimeMap.applyFold(nuc, alt)
+
+        // Helper: pick from primNuc/altNuc given a coda, using tie-break rules.
+        fun pickVariant(coda: String): String? {
+            val pv = isValidRime(primNuc, coda)
+            val av = isValidRime(altNuc, coda)
+            if (pv != av) return if (pv) primNuc else altNuc
+            if (!pv) return null
+            // Both valid standalone — the vowel extension breaks the tie: the
+            // right fold is the one whose compound + following vowels forms a
+            // valid nucleus prefix ("ươ"+"i"="ươi" valid vs "uơ"+"i" invalid).
+            val vt = predictVowelTail(raw, rawPos + 1)
+            if (vt.isNotEmpty()) {
+                val primKey = RimeMap.keyCat(primNuc, primNuc.length, vt, vt.length)
+                val altKey = RimeMap.keyCat(altNuc, altNuc.length, vt, vt.length)
+                val pe = RimeMap.isValidPrefix(RimeMap.extendKey(primKey, out.coda, 0, out.coda.length))
+                val ae = RimeMap.isValidPrefix(RimeMap.extendKey(altKey, out.coda, 0, out.coda.length))
+                if (pe != ae) return if (pe) primNuc else altNuc
+            }
+            val openUoOk = out.onset.isEmpty() || OnsetMap.allowsOpenUo(out.onset)
+            return if (out.coda.isNotEmpty() || !openUoOk) primNuc else altNuc
+        }
+
+        // Try with the predicted tail first; if both invalid, fall back to
+        // empty tail (the predicted consonant may not be a real coda).
+        val candCoda = out.coda + tail
+        var chosen = pickVariant(candCoda)
+        if (chosen == null && tail.isNotEmpty()) {
+            chosen = pickVariant(out.coda)
+        }
+        if (chosen == null) return -1
+        out.nucleus = chosen
+        return RimeMap.foldPos(primary)
+    }
+
+    private fun isValidRime(nucleus: String, coda: String): Boolean {
+        return RimeMap.isValidPrefix(RimeMap.keyCat(nucleus, nucleus.length, coda, coda.length))
+    }
+
+
+
+    // ================================================================
+    // PUBLIC API
+    // ================================================================
+
+    // ── Composing session API (single source of truth for the preedit) ──
+    // The composer owns the composing buffer; the controller delegates every
+    // keystroke, adoption and edit here instead of keeping a second copy.
+
+    /** True while a preedit session has a non-empty raw buffer. */
+    fun isComposing(): Boolean = processRaw.isNotEmpty()
+
+    /** Read-only view of the composing raw keystrokes (caret mapping helpers). */
+    fun composingRaw(): CharSequence = processRaw
+
+    fun composingRawLength(): Int = processRaw.length
+
+    /**
+     * Replaces the composing raw buffer (adoption / display-level edits).
+     * When [composeAsVietnamese] is false the text is kept verbatim (word-edit literal
+     * lock); otherwise it is resegmented through the Telex kernel.
+     */
+    fun setComposingRaw(raw: CharSequence) {
+        processRaw.setLength(0)
+        processRaw.append(raw)
+        if (composeAsVietnamese) {
+            resegment(processRaw, processState)
+        } else {
+            processState.reset()
+            processState.rawSuffix = raw.toString()
+        }
+    }
+
+    /** Inserts one Telex key at [index] of the composing raw and resegments. */
+    fun insertComposingKey(index: Int, key: Char) {
+        processRaw.insert(index, key)
+        if (composeAsVietnamese) {
+            resegment(processRaw, processState)
+        } else {
+            processState.reset()
+            processState.rawSuffix = processRaw.toString()
+        }
+    }
+
+    fun processKey(key: Char): CompositionResult {
+        val isBoundary = key == ' ' || key == '\n' || key == '\t'
+        if (isBoundary) {
+            val commitText = processState.toDisplayString(options.oldTonePlacement)
+            processRaw.clear()
+            processState.reset()
+            composeAsVietnamese = true
+            return CompositionResult.CommitAndStartNew(commitText, key)
+        }
+        insertComposingKey(processRaw.length, key)
+        return CompositionResult.Update(processState.toDisplayString(options.oldTonePlacement))
+    }
+
+    fun backspace(): String {
+        if (processRaw.isEmpty()) return ""
+        val display = processState.toDisplayString(options.oldTonePlacement)
+        // Gboard-style: delete one complete displayed grapheme, never one raw
+        // keystroke. The surviving display is re-adopted to canonical Telex raw
+        // when it round-trips exactly; otherwise it is locked as literal text so
+        // the survivor can never silently re-transform (word-edit mode).
+        // Same single path used by IME display edits: adoptRoundTrip +
+        // setComposingRaw (resegment for Vietnamese, rawSuffix for literal).
+        val start = GraphemeEditor.previousBoundary(display, display.length)
+        if (start <= 0) {
+            processRaw.clear(); processState.reset()
+            return ""
+        }
+        val survivor = display.substring(0, start)
+        val canonical = adoptRoundTrip(survivor)
+        composeAsVietnamese = canonical != null
+        setComposingRaw(canonical ?: survivor)
+        return processState.toDisplayString(options.oldTonePlacement)
+    }
+
+    // ================================================================
+    // REPLAY / COMPILE
+    // ================================================================
+
+    fun compileRaw(raw: CharSequence, vietnamese: Boolean, out: OwnedBuffer) {
+        compileRaw(raw, vietnamese, out, Int.MAX_VALUE)
+    }
+
+    fun compileRaw(raw: CharSequence, vietnamese: Boolean, out: OwnedBuffer, maxLen: Int) {
+        out.clear()
+        val rawLen = maxLen.coerceAtMost(raw.length)
+        if (rawLen == 0) return
+        if (!vietnamese || !vietnameseModeEnabled) { out.append(raw, 0, rawLen); return }
+
+        var i = 0
+        while (i < rawLen) {
+            val c = raw[i]
+            if (isBoundaryKey(c)) {
+                out.append(c)
+                replayState.reset()
+                i++
+                continue
+            }
+            val start = i
+            while (i < rawLen && !isBoundaryKey(raw[i])) i++
+            val syllable = raw.subSequence(start, i)
+            resegment(syllable, replayState)
+            out.append(replayState.toDisplayString(options.oldTonePlacement))
+        }
+        replayState.reset()
+    }
+
+    private fun isBoundaryKey(c: Char): Boolean {
+        return c == ' ' || c == '\n' || c == '\t' || c == '\r'
+    }
+
+    // ================================================================
+    // ADOPT WORD
+    // ================================================================
+
     fun adoptWord(word: String): AdoptResult? {
         if (word.isEmpty()) return null
-
-        // Parse display text into phonological components
         val nfcWord = VietnameseUnicode.normalizeNfc(word)
 
-        // 1. Extract tone
         var detectedTone = Tone.NONE
         val untonedChars = StringBuilder()
         for (c in nfcWord) {
-            val t = extractToneFromChar(c)
+            val t = VietnameseUnicode.toneOf(c)
             if (t != Tone.NONE && detectedTone == Tone.NONE) detectedTone = t
             untonedChars.append(VietnameseUnicode.stripTone(c))
         }
         val baseWord = untonedChars.toString()
         val baseLower = baseWord.lowercase()
 
-        // 2. Extract onset (longest valid initial consonant)
-        var onset = ""
-        var remainingAfterOnset = baseWord
-        for (cand in VietnamesePhonology.ONSETS) {
-            if (baseLower.startsWith(cand)) {
-                if (cand == "gi" && baseLower.length > 2 && VietnamesePhonology.isBaseVowel(baseLower[2])) {
-                    onset = baseWord.substring(0, 2)
-                    remainingAfterOnset = baseWord.substring(2)
-                    break
-                } else if (cand == "qu" && baseLower.length > 2 && VietnamesePhonology.isBaseVowel(baseLower[2])) {
-                    onset = baseWord.substring(0, 2)
-                    remainingAfterOnset = baseWord.substring(2)
-                    break
-                } else if (cand == "gi" && (baseLower.length == 2 || !VietnamesePhonology.isBaseVowel(baseLower[2]))) {
-                    onset = baseWord.substring(0, 1)
-                    remainingAfterOnset = baseWord.substring(1)
-                    break
-                } else {
-                    onset = baseWord.substring(0, cand.length)
-                    remainingAfterOnset = baseWord.substring(cand.length)
-                    break
+        val onsetLen = OnsetMap.longestOnsetPrefix(baseLower)
+        var onset = if (onsetLen > 0) baseWord.substring(0, onsetLen) else ""
+        var remainingAfterOnset = baseWord.substring(onsetLen)
+
+        val nucleusSb = StringBuilder()
+        var remIdx = 0
+        while (remIdx < remainingAfterOnset.length && RimeMap.isBaseVowel(remainingAfterOnset[remIdx])) {
+            nucleusSb.append(remainingAfterOnset[remIdx]); remIdx++
+        }
+        var nucleus = nucleusSb.toString()
+        var remainingAfterNucleus = remainingAfterOnset.substring(remIdx)
+        var remLower = remainingAfterNucleus.lowercase()
+
+        // If onset is "gi" but nucleus is empty, shrink to "g" so "i" becomes
+        // the nucleus — mirrors the resegment logic that skips "gi" onset
+        // when no vowel follows.  This fixes "gì/gí/gĩ/gỉ/gị" round-trip.
+        if (nucleus.isEmpty() && onset.length > 1 && onset.last().lowercaseChar() == 'i') {
+            val shorterOnset = baseWord.substring(0, onset.length - 1)
+            if (OnsetMap.isCompleteOnset(shorterOnset.lowercase(), 0, shorterOnset.length)) {
+                onset = shorterOnset
+                remainingAfterOnset = baseWord.substring(onset.length)
+                val nsb = StringBuilder()
+                var ri = 0
+                while (ri < remainingAfterOnset.length && RimeMap.isBaseVowel(remainingAfterOnset[ri])) {
+                    nsb.append(remainingAfterOnset[ri]); ri++
                 }
+                nucleus = nsb.toString()
+                remainingAfterNucleus = remainingAfterOnset.substring(ri)
+                remLower = remainingAfterNucleus.lowercase()
             }
         }
 
-        // 3. Extract nucleus (contiguous vowels)
-        val nucleusSb = StringBuilder()
-        var remIdx = 0
-        while (remIdx < remainingAfterOnset.length && VietnamesePhonology.isBaseVowel(remainingAfterOnset[remIdx])) {
-            nucleusSb.append(remainingAfterOnset[remIdx])
-            remIdx++
-        }
-        val nucleus = nucleusSb.toString()
-        val remainingAfterNucleus = remainingAfterOnset.substring(remIdx)
-        val remLower = remainingAfterNucleus.lowercase()
-
-        // 4. Extract coda
         var coda = ""
         var rawSuffix = ""
         if (nucleus.isNotEmpty()) {
             var matchedCoda = false
-            for (cand in VietnamesePhonology.CODAS) {
+            for (cand in RimeMap.CODAS) {
                 if (remLower.startsWith(cand)) {
                     val candidateRime = nucleus.lowercase() + cand
-                    if (VietnamesePhonology.isValidPrefix(candidateRime) &&
-                        VietnamesePhonology.isRimeValidForTone(candidateRime.lowercase(), detectedTone)) {
+                    if (RimeMap.isValidPrefix(RimeMap.rimeKey(candidateRime)) &&
+                        RimeMap.isRimeValidForTone(candidateRime.lowercase(), detectedTone)) {
                         coda = remainingAfterNucleus.substring(0, cand.length)
                         rawSuffix = remainingAfterNucleus.substring(cand.length)
-                        matchedCoda = true
-                        break
+                        matchedCoda = true; break
                     }
                 }
             }
@@ -328,492 +851,88 @@ class VietnameseComposer(var options: EngineOptions = EngineOptions()) {
             rawSuffix = remainingAfterNucleus
         }
 
-        val hasValidRime = nucleus.isNotEmpty() && VietnamesePhonology.isValidRime(nucleus.lowercase() + coda.lowercase())
+        val hasValidRime = nucleus.isNotEmpty() && RimeMap.isValidPrefix(RimeMap.rimeKey(nucleus.lowercase() + coda.lowercase()))
         val validTone = if (hasValidRime) detectedTone else Tone.NONE
         val validSuffix = if (hasValidRime) rawSuffix else (if (detectedTone != Tone.NONE) word.substring(onset.length) else rawSuffix)
 
-        // 5. Validate and build result
         val rimeKey = nucleus.lowercase() + coda.lowercase()
         val isValidRimeOrPrefix = if (nucleus.isEmpty()) {
             onset.isNotEmpty() && coda.isEmpty()
         } else {
-            VietnamesePhonology.isValidPrefix(rimeKey) &&
-            VietnamesePhonology.isRimeValidForTone(rimeKey, validTone)
+            RimeMap.isValidPrefix(RimeMap.rimeKey(rimeKey)) && RimeMap.isRimeValidForTone(rimeKey, validTone)
         }
         val isValid = validSuffix.isEmpty() && isValidRimeOrPrefix
 
-        // 6. Generate canonical raw keystrokes
         val canonicalRaw = if (isValid) {
             val sb = StringBuilder()
-            val onsetLower = onset.lowercase()
-            when (onsetLower) {
+            when (onset.lowercase()) {
                 "đ" -> sb.append(if (onset == "Đ") "DD" else if (onset[0].isUpperCase()) "Dd" else "dd")
                 else -> sb.append(onset)
             }
-            val nucleusLower = nucleus.lowercase()
+            sb.append(nucleusToRaw(nucleus))
             val nucAllUpper = nucleus.isNotEmpty() && nucleus.all { it.isUpperCase() }
-            val nucFirstUpper = nucleus.isNotEmpty() && nucleus[0].isUpperCase()
-            if (nucleusLower == "ươ") {
-                sb.append(if (nucAllUpper) "UWO" else if (nucFirstUpper) "Uwo" else "uwo")
-            } else if (nucleusLower == "ưa") {
-                sb.append(if (nucAllUpper) "UWA" else if (nucFirstUpper) "Uwa" else "uwa")
-            } else if (nucleusLower == "uơ") {
-                sb.append(if (nucAllUpper) "UOW" else if (nucFirstUpper) "Uow" else "uow")
-            } else {
-                for (c in nucleus) {
-                    val cl = c.lowercaseChar()
-                    val isUpper = c.isUpperCase()
-                    when (cl) {
-                        'â' -> sb.append(if (isUpper) "Aa" else "aa")
-                        'ă' -> sb.append(if (isUpper) "Aw" else "aw")
-                        'ê' -> sb.append(if (isUpper) "Ee" else "ee")
-                        'ô' -> sb.append(if (isUpper) "Oo" else "oo")
-                        'ơ' -> sb.append(if (isUpper) "Ow" else "ow")
-                        'ư' -> sb.append(if (isUpper) "Uw" else "uw")
-                        else -> sb.append(c)
-                    }
-                }
-            }
             sb.append(coda)
-            val toneKey = when (validTone) {
-                Tone.ACUTE -> 's'; Tone.GRAVE -> 'f'; Tone.HOOK -> 'r'
-                Tone.TILDE -> 'x'; Tone.DOT -> 'j'; Tone.NONE -> null
-            }
-            if (toneKey != null) {
-                sb.append(if (nucAllUpper) toneKey.uppercaseChar() else toneKey)
-            }
+            val toneKey = validTone.key
+            if (toneKey != null) sb.append(if (nucAllUpper) toneKey.uppercaseChar() else toneKey)
             VietnameseUnicode.applyCasingFromRaw(sb.toString(), word)
-        } else {
-            word
-        }
+        } else { word }
 
-        // 7. Return the parse result. The controller gates adoption by round-tripping
-        // canonicalRaw through compileRaw() against the committed word, so a canonical
-        // encoding that does not replay faithfully is never adopted (fresh typing instead).
         return AdoptResult(isValid, onset.length, canonicalRaw)
     }
 
-    private fun extractToneFromChar(c: Char): Tone {
-        val lower = c.lowercaseChar()
-        return when (lower) {
-            'á', 'ắ', 'ấ', 'é', 'ế', 'í', 'ó', 'ố', 'ớ', 'ú', 'ứ', 'ý' -> Tone.ACUTE
-            'à', 'ằ', 'ầ', 'è', 'ề', 'ì', 'ò', 'ồ', 'ờ', 'ù', 'ừ', 'ỳ' -> Tone.GRAVE
-            'ả', 'ẳ', 'ẩ', 'ẻ', 'ể', 'ỉ', 'ỏ', 'ổ', 'ở', 'ủ', 'ử', 'ỷ' -> Tone.HOOK
-            'ã', 'ẵ', 'ẫ', 'ẽ', 'ễ', 'ĩ', 'õ', 'ỗ', 'ỡ', 'ũ', 'ữ', 'ỹ' -> Tone.TILDE
-            'ạ', 'ặ', 'ậ', 'ẹ', 'ệ', 'ị', 'ọ', 'ộ', 'ợ', 'ụ', 'ự', 'ỵ' -> Tone.DOT
-            else -> Tone.NONE
-        }
+    /**
+     * Canonical Telex raw for [adopt] when the word round-trips exactly through
+     * the Telex kernel; null otherwise.  Shared by every adopt path (composer
+     * backspace, IME display edits, prefix adoption, mid-word resume) so the
+     * "adopt iff replay == display" decision lives in exactly one place.
+     */
+    fun canonicalRawIfRoundTrips(adopt: AdoptResult?, display: String): String? {
+        if (adopt == null || !adopt.isValid) return null
+        val canonical = adopt.canonicalRaw
+        return if (process(canonical) == display) canonical else null
     }
 
-    fun process(raw: String): String = processString(raw)
+    /** [adoptWord] + round-trip gate in one call — null when not adoptable. */
+    fun adoptRoundTrip(display: String): String? =
+        canonicalRawIfRoundTrips(adoptWord(display), display)
 
-    fun processString(raw: String): String {
+    // ================================================================
+    // PUBLIC: process
+    // ================================================================
+
+    fun process(raw: String): String {
         if (raw.isEmpty()) return ""
         compileRaw(raw, true, stringOut)
         return stringOut.toStringVal()
     }
 
-
+    // ================================================================
+    // COMPANION
+    // ================================================================
 
     companion object {
-        private val displayBuffer = ThreadLocal.withInitial { CharArray(32) }
-
-        private fun ensureBuffer(size: Int): CharArray {
-            val current = displayBuffer.get() ?: return CharArray(size.coerceAtLeast(64))
-            return if (current.size >= size) current else {
-                val grown = CharArray(size.coerceAtLeast(64))
-                displayBuffer.set(grown)
-                grown
-            }
-        }
-
-        private const val PROP_BOUNDARY = 32
-        private const val PROP_TONE = 1
-        private const val PROP_MOD = 2
-        private const val PROP_VOWEL = 4
-        private const val PROP_ONSET = 8
-        private const val PROP_D = 16
-        private const val PROP_D_ONSET = PROP_D or PROP_ONSET
-        private const val PROP_TONE_ONSET = PROP_TONE or PROP_ONSET
-        private const val PROP_MOD_VOWEL = PROP_MOD or PROP_VOWEL
-
-        /**
-         * Key property bitmap — one array read classifies every keystroke on the
-         * applyKey hot path (boundary → d/đ → tone → vowel modifier → vowel →
-         * onset → raw), replacing 5 sequential classifier checks with a single
-         * lookup + one switch.  Zero allocation, cache-resident.
-         * Size 512 covers all base Vietnamese letters (đ=273, ơ=417, ư=432).
-         */
-        private val CHAR_PROPS = ByteArray(512).also { p ->
-            for (c in "sfrxjz") p[c.code] = (p[c.code].toInt() or PROP_TONE).toByte()
-            for (c in "eoaw") p[c.code] = (p[c.code].toInt() or PROP_MOD).toByte()
-            for (c in "aăâeêioôơuưy") p[c.code] = (p[c.code].toInt() or PROP_VOWEL).toByte()
-            for (c in "bcdđghklmnprstvxq") p[c.code] = (p[c.code].toInt() or PROP_ONSET).toByte()
-            p['d'.code] = (p['d'.code].toInt() or PROP_D).toByte() // only d → handleKeyD; đ stays an onset
-            // Boundary set == BoundaryClassifier: ASCII whitespace + separators +
-            // NEL(133), NBSP(160), «(171), »(187) — all < 256.
-            for (code in intArrayOf(
-                9, 10, 11, 12, 13, 28, 29, 30, 31, 32,
-                33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47,
-                58, 59, 60, 61, 62, 63, 64, 91, 92, 93, 94, 95, 96,
-                123, 124, 125, 126, 133, 160, 171, 187
-            )) p[code] = (p[code].toInt() or PROP_BOUNDARY).toByte()
-        }
+        @JvmStatic
+        fun isToneKey(c: Char): Boolean = RimeMap.isToneKey(c)
 
         @JvmStatic
-        private fun charProps(c: Char): Int {
-            val code = c.lowercaseChar().code
-            return if (code < CHAR_PROPS.size) CHAR_PROPS[code].toInt() else 0
-        }
+        fun isVowelModifierKey(c: Char): Boolean = RimeMap.isFoldKey(c)
 
-        @JvmStatic
-        fun isToneKey(c: Char): Boolean = charProps(c) and PROP_TONE != 0
-
-        @JvmStatic
-        fun isVowelModifierKey(c: Char): Boolean = charProps(c) and PROP_MOD != 0
-
-        /**
-         * Boundary test via the same bitmap; chars above the table fall back to
-         * Character.isWhitespace (the only high-Unicode boundary class).
-         */
-        @JvmStatic
-        private fun isBoundaryKey(c: Char): Boolean {
-            val code = c.code
-            if (code < CHAR_PROPS.size) return (CHAR_PROPS[code].toInt() and PROP_BOUNDARY) != 0
-            return c.isWhitespace()
-        }
-
-        /** Modifier key → TargetType for fold dispatch. */
-        private val MODIFIER_TARGET_TYPES = mapOf(
-            'e' to TargetType.E_NUCLEUS,
-            'o' to TargetType.O_NUCLEUS,
-            'a' to TargetType.A_NUCLEUS
-        )
-
-        /** Nucleus auto-promotion: uơ → ươ when consonant follows. */
-        private val NUCLEUS_AUTOPROMOTIONS = mapOf("uơ" to true)
-    }
-
-    private fun applyKey(state: SyllableState, c: Char, isStaticReDerive: Boolean): Boolean {
-        val lower = c.lowercaseChar()
-        val isUpper = c.isUpperCase()
-
-        if (state.rawSuffix.isNotEmpty()) {
-            if (lower == 'a' && state.rawSuffix == "n" && state.coda == "n" && state.nucleus.contains('ă')) {
-                val handled = handleVowelModifierKey(state, lower, isUpper, isStaticReDerive)
-                if (handled) {
-                    state.rawSuffix = ""
-                    return true
-                }
+        fun nucleusToRaw(nucleus: String): String {
+            if (nucleus.isEmpty()) return ""
+            val raw = RimeMap.rawKeyForNucleus(nucleus)
+            val allUpper = nucleus.all { it.isUpperCase() }
+            val firstUpper = nucleus.isNotEmpty() && nucleus[0].isUpperCase()
+            return when {
+                allUpper -> raw.uppercase()
+                firstUpper -> raw.replaceFirstChar { it.uppercase() }
+                else -> raw
             }
-            state.lastToggle = null
-            state.rawSuffix += c
-            return true
-        }
-
-        // Single bitmap lookup + one switch routes every key to its handler,
-        // preserving the old priority order: d/đ → tone → vowel modifier →
-        // vowel → onset; everything else is raw text.
-        when (charProps(lower)) {
-            PROP_D_ONSET -> {
-                if (handleKeyD(state, c)) return true
-                return handleConsonantChar(state, c)
-            }
-            PROP_TONE -> {
-                if (handleToneKey(state, lower)) return true
-            }
-            PROP_TONE_ONSET -> {
-                if (handleToneKey(state, lower)) return true
-                return handleConsonantChar(state, c) // r/s/x stay valid onsets
-            }
-            PROP_MOD -> {
-                if (handleVowelModifierKey(state, lower, isUpper, isStaticReDerive)) return true
-            }
-            PROP_MOD_VOWEL -> {
-                if (handleVowelModifierKey(state, lower, isUpper, isStaticReDerive)) return true
-                return handleVowelChar(state, c) // a/e/o fall back to vowels
-            }
-            PROP_VOWEL -> return handleVowelChar(state, c)
-            PROP_ONSET -> return handleConsonantChar(state, c)
-        }
-
-        state.lastToggle = null
-        state.rawSuffix += c
-        return true
-    }
-
-    private fun handleKeyD(state: SyllableState, c: Char): Boolean {
-        val isUpper = c.isUpperCase()
-
-        if (state.lastToggle?.key == 'd' && state.onset.length == 1 && state.onset[0].lowercaseChar() == 'đ') {
-            val dChar = if (state.onset[0].isUpperCase()) "D" else "d"
-            state.onset = dChar
-            val extraChar = if (isUpper) "D" else "d"
-            if (state.nucleus.isEmpty() && state.coda.isEmpty() && state.rawSuffix.isEmpty()) {
-                state.onset = dChar + extraChar
-            } else {
-                state.rawSuffix += extraChar
-            }
-            state.lastToggle = null
-            return true
-        }
-
-        if (state.onset.length == 1 && state.onset[0].lowercaseChar() == 'd') {
-            val dChar = if (state.onset[0].isUpperCase()) "Đ" else "đ"
-            state.onset = dChar
-            val hadCharsAfter = state.nucleus.isNotEmpty() || state.coda.isNotEmpty()
-            state.lastToggle = LastToggle(key = 'd', targetType = TargetType.D_ONSET, hadCharsAfter = hadCharsAfter)
-            return true
-        }
-
-        if (state.onset.isEmpty() && state.nucleus.isEmpty() && state.coda.isEmpty()) {
-            state.onset = c.toString()
-            state.lastToggle = null
-            return true
-        }
-
-        state.lastToggle = null
-        state.rawSuffix += c
-        return true
-    }
-
-    private fun handleToneKey(state: SyllableState, key: Char): Boolean {
-        if (state.nucleus.isEmpty()) return false
-
-        if (state.coda.isNotEmpty() && !VietnamesePhonology.isValidCoda(state.coda)) {
-            return false
-        }
-
-        val targetTone = Tone.fromKey(key) ?: return false
-
-        // Check raw nucleus for double-letter guard (aa/ee) — direct char check, no String alloc
-        val nLen = state.nucleus.length
-        if (nLen >= 2) {
-            val c0 = state.nucleus[0].lowercaseChar()
-            val c1 = state.nucleus[1].lowercaseChar()
-            if ((c0 == 'a' && c1 == 'a') || (c0 == 'e' && c1 == 'e')) return false
-        }
-
-        // Validate rime + tone in a single hash lookup — zero allocation
-        val currentRimeHash = RimeMap.hashCat(state.nucleus, nLen, state.coda, state.coda.length)
-        if (!VietnamesePhonology.isRimeHashValidForTone(currentRimeHash, targetTone)) {
-            return false
-        }
-
-        if (key == 'z') {
-            if (state.tone != Tone.NONE) {
-                state.tone = Tone.NONE
-                state.lastToggle = null
-                return true
-            }
-            return false
-        }
-
-        if (state.tone == targetTone) {
-            state.tone = Tone.NONE
-            state.rawSuffix += key
-            state.lastToggle = null
-            return true
-        } else {
-            state.tone = targetTone
-            state.lastToggle = null
-            return true
         }
     }
 
-    private fun handleVowelModifierKey(
-        state: SyllableState,
-        key: Char,
-        isUpper: Boolean,
-        isStaticReDerive: Boolean
-    ): Boolean {
-        if (state.lastToggle?.key == key) {
-            val toggle = state.lastToggle!!
-            val untoggled = untoggleVowelModifier(state, toggle, key, isUpper)
-            if (untoggled) {
-                state.lastToggle = null
-                return true
-            }
-        }
-
-        if (isStaticReDerive && (key == 'a' || key == 'e' || key == 'u') && key != 'o') {
-            return false
-        }
-
-        val targetType = MODIFIER_TARGET_TYPES[key]
-        if (targetType != null) {
-            foldResult.nucleus = ""
-            foldResult.hadCharsAfter = false
-            if (VietnamesePhonology.foldSingle(
-                    state.nucleus,
-                    VietnamesePhonology.foldRulesFor(key),
-                    state.coda,
-                    state.onset,
-                    foldResult
-                )
-            ) {
-                state.nucleus = foldResult.nucleus
-                state.lastToggle = LastToggle(key, targetType, foldResult.hadCharsAfter)
-                return true
-            }
-            return false
-        }
-
-        if (key == 'w') return handleKeyW(state, isUpper)
-        return false
-    }
-
-    private fun handleKeyW(state: SyllableState, isUpper: Boolean): Boolean {
-        if (state.nucleus.isEmpty()) {
-            if (options.directW) {
-                val wChar = if (isUpper) "W" else "w"
-                if (state.onset.isEmpty()) {
-                    state.onset = wChar
-                } else {
-                    state.rawSuffix += wChar
-                }
-                state.lastToggle = null
-                return true
-            }
-            val uChar = if (isUpper) 'Ư' else 'ư'
-            state.nucleus = uChar.toString()
-            state.lastToggle = LastToggle(key = 'w', targetType = TargetType.W_SOLO, hadCharsAfter = false)
-            return true
-        }
-
-        val result = VietnamesePhonology.applyW(state.nucleus, state.coda, state.onset)
-        if (result != null) {
-            state.nucleus = result.first
-            result.second?.let { state.lastToggle = it }
-            return true
-        }
-        return false
-    }
-
-    private fun untoggleVowelModifier(
-        state: SyllableState,
-        toggle: LastToggle,
-        key: Char,
-        isUpper: Boolean
-    ): Boolean {
-        if (toggle.targetType == TargetType.W_SOLO) {
-            val extraChar = if (isUpper) 'W' else 'w'
-            state.nucleus = ""
-            state.rawSuffix = extraChar.toString()
-            return true
-        }
-
-        val res = VietnamesePhonology.UnfoldResult()
-        if (!VietnamesePhonology.unfold(state.nucleus, toggle.targetType, isUpper, res)) {
-            return false
-        }
-        state.nucleus = res.nucleus
-
-        if (state.coda.isEmpty() && state.rawSuffix.isEmpty() && res.foldedIndex == res.nucleus.length - 1) {
-            state.nucleus += res.tail
-            return true
-        }
-        state.rawSuffix += res.tail
-        return true
-    }
-
-    private fun handleVowelChar(state: SyllableState, c: Char): Boolean {
-        val lower = c.lowercaseChar()
-
-        // 1. Onset promotion: gi+V → onset "gi", V becomes nucleus; qu+V → onset "qu", V becomes nucleus
-        val promotedOnset = VietnamesePhonology.lookupOnsetPromotion(state.onset, state.nucleus)
-        if (promotedOnset != null && state.coda.isEmpty()) {
-            if (state.onset[0].isUpperCase()) {
-                state.onset = promotedOnset.replaceFirstChar { it.uppercase() }
-            } else {
-                state.onset = promotedOnset
-            }
-            state.nucleus = c.toString()
-            state.lastToggle = null
-            return true
-        }
-
-        // 2. Vowel combination: ư+o→ươ, ư+a→ưa, uơ+i→ươi, uơ+u→ươu
-        val combo = VietnamesePhonology.lookupVowelCombination(state.nucleus, c)
-        if (combo != null) {
-            state.nucleus = combo
-            state.lastToggle = null
-            return true
-        }
-
-        // 3. Normal vowel expansion into nucleus (if no coda yet)
-        if (state.coda.isEmpty()) {
-            // Hash nucleus + new char incrementally — zero allocation
-            // MUST use hashRaw (no or 1L) as base for hashExtend
-            val nucRawHash = RimeMap.hashRaw(state.nucleus, 0, state.nucleus.length)
-            if (VietnamesePhonology.isValidPrefixHash(RimeMap.hashExtend(nucRawHash, c))) {
-                state.nucleus = state.nucleus + c
-                state.lastToggle = null
-                return true
-            }
-            state.lastToggle = null
-            state.rawSuffix += c
-            return true
-        }
-
-        // 4. Coda exists → append to raw suffix
-        state.lastToggle = null
-        state.rawSuffix += c
-        return true
-    }
-
-    private fun handleConsonantChar(state: SyllableState, c: Char): Boolean {
-        if (state.nucleus.isEmpty()) {
-            val candidate = state.onset + c
-            if (VietnamesePhonology.isValidOnset(candidate) || state.onset.isEmpty()) {
-                state.onset = candidate
-                state.lastToggle = null
-                return true
-            }
-            state.lastToggle = null
-            state.rawSuffix += c
-            return true
-        }
-
-        var effectiveNucleus = state.nucleus
-        // Auto-promotion check: direct lowercaseChar comparison — no String.lowercase() alloc
-        val effLowerLen = effectiveNucleus.length
-        if (effLowerLen == 2 && effectiveNucleus[0].lowercaseChar() == 'u' && effectiveNucleus[1].lowercaseChar() == 'ơ') {
-            effectiveNucleus = VietnamesePhonology.buildUoPair(effectiveNucleus[0], effectiveNucleus[1], hornU = true)
-        }
-
-        // Validate coda + rime + tone — all hash-based, zero allocation
-        // Coda max 2 chars; single-char coda must be m/p/n/t/c
-        val cLow = c.lowercaseChar()
-        val codaValid = if (state.coda.isEmpty()) {
-            cLow == 'm' || cLow == 'p' || cLow == 'n' || cLow == 't' || cLow == 'c'
-        } else if (state.coda.length == 1) {
-            val c0 = state.coda[0].lowercaseChar()
-            (c0 == 'n' && (cLow == 'g' || cLow == 'h')) || (c0 == 'c' && cLow == 'h')
-        } else false
-        if (codaValid) {
-            // MUST use hashCatRaw (no or 1L) as base for hashExtend
-            val rimeRawHash = RimeMap.hashCatRaw(effectiveNucleus, effectiveNucleus.length, state.coda, state.coda.length)
-            val candidateRimeHash = RimeMap.hashExtend(rimeRawHash, c)
-            if (VietnamesePhonology.isValidPrefixHash(candidateRimeHash) &&
-                VietnamesePhonology.isRimeHashValidForTone(candidateRimeHash, state.tone)) {
-                state.nucleus = effectiveNucleus
-                state.coda = state.coda + c
-                state.lastToggle = null
-                return true
-            }
-        }
-
-        state.lastToggle = null
-        state.rawSuffix += c
-        return true
-    }
-
-
-
-    // ==========================================
-    // PREFS / MACRO / CONFIG
-    // ==========================================
+    // ================================================================
+    // PREFERENCES
+    // ================================================================
 
     var macroStore: MacroStore? = null
     private var macroPrefsListener: android.content.SharedPreferences.OnSharedPreferenceChangeListener? = null
@@ -826,20 +945,16 @@ class VietnameseComposer(var options: EngineOptions = EngineOptions()) {
             applyConfig(config)
             macroStore = MacroRepository(context).loadMacroStore()
             if (macroPrefsListener == null) {
-                val listener = android.content.SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
-                    if (AppPreferences.isMacroDataKey(key)) {
-                        reloadMacroStore(context)
-                    }
+                macroPrefsListener = android.content.SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
+                    if (AppPreferences.isMacroDataKey(key)) reloadMacroStore(context)
                 }
-                macroPrefsListener = listener
-                AppPreferences.registerMacroPrefsListener(listener)
+                AppPreferences.registerMacroPrefsListener(macroPrefsListener!!)
             }
             if (settingsPrefsListener == null) {
-                val listener = android.content.SharedPreferences.OnSharedPreferenceChangeListener { _, _ ->
+                settingsPrefsListener = android.content.SharedPreferences.OnSharedPreferenceChangeListener { _, _ ->
                     loadPreferences(context)
                 }
-                settingsPrefsListener = listener
-                AppPreferences.registerSettingsPrefsListener(listener)
+                AppPreferences.registerSettingsPrefsListener(settingsPrefsListener!!)
             }
         } catch (e: Exception) {
             System.err.println("[VietnameseComposer] Failed to load preferences: ${e.message}")
@@ -847,14 +962,8 @@ class VietnameseComposer(var options: EngineOptions = EngineOptions()) {
     }
 
     fun cleanup() {
-        macroPrefsListener?.let {
-            AppPreferences.unregisterMacroPrefsListener(it)
-            macroPrefsListener = null
-        }
-        settingsPrefsListener?.let {
-            AppPreferences.unregisterSettingsPrefsListener(it)
-            settingsPrefsListener = null
-        }
+        macroPrefsListener?.let { AppPreferences.unregisterMacroPrefsListener(it); macroPrefsListener = null }
+        settingsPrefsListener?.let { AppPreferences.unregisterSettingsPrefsListener(it); settingsPrefsListener = null }
     }
 
     fun reloadMacroStore(context: Context) {
@@ -878,13 +987,8 @@ class VietnameseComposer(var options: EngineOptions = EngineOptions()) {
     ) {
         try {
             AppPreferences.init(context)
-            val config = EngineConfig(
-                macroEnabled = macro,
-                alwaysMacro = alwaysMac,
-                autoCapitalize = autoCap,
-                directW = dirW,
-                oldTonePlacement = oldTone
-            )
+            val config = EngineConfig(macroEnabled = macro, alwaysMacro = alwaysMac,
+                autoCapitalize = autoCap, directW = dirW, oldTonePlacement = oldTone)
             AppPreferences.setEngineConfig(config)
             applyConfig(config)
         } catch (e: Exception) {
