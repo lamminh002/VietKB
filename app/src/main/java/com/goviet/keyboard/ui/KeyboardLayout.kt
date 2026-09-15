@@ -11,13 +11,14 @@ object KeyboardLayout {
         shiftState: Int,
         languageMode: String,
         imeOptions: Int,
-        inputType: Int
+        inputType: Int,
+        isSplit: Boolean = false
     ): Pair<List<Key>, List<List<Key>>> {
         val keys = mutableListOf<Key>()
 
         when (mode) {
-            "ABC" -> buildAlphanumericKeys(keys, shiftState)
-            else -> buildSymbolKeys(keys, mode)
+            "ABC" -> buildAlphanumericKeys(keys, shiftState, isSplit)
+            else -> buildSymbolKeys(keys, mode, isSplit)
         }
 
         resolveLabels(keys, shiftState, languageMode, imeOptions, inputType)
@@ -61,7 +62,7 @@ object KeyboardLayout {
         }
     }
 
-    private fun buildAlphanumericKeys(keys: MutableList<Key>, shiftState: Int) {
+    private fun buildAlphanumericKeys(keys: MutableList<Key>, shiftState: Int, isSplit: Boolean = false) {
         val row0 = listOf("1", "2", "3", "4", "5", "6", "7", "8", "9", "0")
         val row1 = listOf("q", "w", "e", "r", "t", "y", "u", "i", "o", "p")
         val row2 = listOf("a", "s", "d", "f", "g", "h", "j", "k", "l")
@@ -97,8 +98,8 @@ object KeyboardLayout {
         }
         for (letter in row3) {
             when (letter) {
-                "SHIFT" -> keys.add(Key(code = "SHIFT", label = "\u21E7", isFunctional = true, weight = 1.4f))
-                "BACKSPACE" -> keys.add(Key(code = "BACKSPACE", label = "\u232B", isFunctional = true, weight = 1.4f))
+                "SHIFT" -> keys.add(Key(code = "SHIFT", label = "\u21E7", isFunctional = true, weight = if (isSplit) 1.25f else 1.4f))
+                "BACKSPACE" -> keys.add(Key(code = "BACKSPACE", label = "\u232B", isFunctional = true, weight = if (isSplit) 1.25f else 1.4f))
                 else -> {
                     val opts = getLongPressOptions(letter, shiftState > 0)
                     keys.add(Key(
@@ -113,27 +114,49 @@ object KeyboardLayout {
         }
 
         // Row 4 — space row
-        keys.add(Key(code = "SYM", label = "?123", isFunctional = true, weight = 1.4f))
-        keys.add(Key(
-            code = ",",
-            label = ",",
-            isFunctional = true,
-            weight = 1.2f,
-            longPressOptions = symbolLongPressMap[","]
-        ))
-        keys.add(Key(code = "SPACE", label = "Space", weight = 5.5f))
-        keys.add(Key(
-            code = ".",
-            label = ".",
-            secondaryLabel = "\u2026",
-            isFunctional = true,
-            weight = 1.2f,
-            longPressOptions = symbolLongPressMap["."]
-        ))
-        keys.add(Key(code = "ENTER", label = "Enter", isSpecialEnter = true, isFunctional = true, weight = 1.4f))
+        if (isSplit) {
+            keys.add(Key(code = "SYM", label = "?123", isFunctional = true, weight = 1.2f))
+            keys.add(Key(
+                code = ",",
+                label = ",",
+                isFunctional = true,
+                weight = 1.0f,
+                longPressOptions = symbolLongPressMap[","]
+            ))
+            keys.add(Key(code = "SPACE", label = "Space", weight = 2.8f))
+            keys.add(Key(code = "SPACE", label = "Space", weight = 2.8f))
+            keys.add(Key(
+                code = ".",
+                label = ".",
+                secondaryLabel = "\u2026",
+                isFunctional = true,
+                weight = 1.0f,
+                longPressOptions = symbolLongPressMap["."]
+            ))
+            keys.add(Key(code = "ENTER", label = "Enter", isSpecialEnter = true, isFunctional = true, weight = 1.2f))
+        } else {
+            keys.add(Key(code = "SYM", label = "?123", isFunctional = true, weight = 1.4f))
+            keys.add(Key(
+                code = ",",
+                label = ",",
+                isFunctional = true,
+                weight = 1.2f,
+                longPressOptions = symbolLongPressMap[","]
+            ))
+            keys.add(Key(code = "SPACE", label = "Space", weight = 5.5f))
+            keys.add(Key(
+                code = ".",
+                label = ".",
+                secondaryLabel = "\u2026",
+                isFunctional = true,
+                weight = 1.2f,
+                longPressOptions = symbolLongPressMap["."]
+            ))
+            keys.add(Key(code = "ENTER", label = "Enter", isSpecialEnter = true, isFunctional = true, weight = 1.4f))
+        }
     }
 
-    private fun buildSymbolKeys(keys: MutableList<Key>, mode: String) {
+    private fun buildSymbolKeys(keys: MutableList<Key>, mode: String, isSplit: Boolean = false) {
         val isPage2 = mode == "SYM2"
 
         val row0 = if (!isPage2) {
@@ -162,31 +185,53 @@ object KeyboardLayout {
         for (sym in row2) addSymbolKey(keys, sym)
 
         val toggleLabel = if (!isPage2) "=\\" else "?123"
-        keys.add(Key(code = "SWITCH_PAGE", label = toggleLabel, isFunctional = true, weight = 1.4f))
+        keys.add(Key(code = "SWITCH_PAGE", label = toggleLabel, isFunctional = true, weight = if (isSplit) 1.25f else 1.4f))
 
         for (sym in row3) addSymbolKey(keys, sym)
 
-        keys.add(Key(code = "BACKSPACE", label = "\u232B", isFunctional = true, weight = 1.4f))
+        keys.add(Key(code = "BACKSPACE", label = "\u232B", isFunctional = true, weight = if (isSplit) 1.25f else 1.4f))
 
         // Bottom control row
-        keys.add(Key(code = "ABC", label = "ABC", isFunctional = true, weight = 1.4f))
-        keys.add(Key(
-            code = ",",
-            label = ",",
-            isFunctional = true,
-            weight = 1.2f,
-            longPressOptions = symbolLongPressMap[","]
-        ))
-        keys.add(Key(code = "SPACE", label = "Space", weight = 5.5f))
-        keys.add(Key(
-            code = ".",
-            label = ".",
-            secondaryLabel = "\u2026",
-            isFunctional = true,
-            weight = 1.2f,
-            longPressOptions = symbolLongPressMap["."]
-        ))
-        keys.add(Key(code = "ENTER", label = "Enter", isSpecialEnter = true, isFunctional = true, weight = 1.4f))
+        if (isSplit) {
+            keys.add(Key(code = "ABC", label = "ABC", isFunctional = true, weight = 1.2f))
+            keys.add(Key(
+                code = ",",
+                label = ",",
+                isFunctional = true,
+                weight = 1.0f,
+                longPressOptions = symbolLongPressMap[","]
+            ))
+            keys.add(Key(code = "SPACE", label = "Space", weight = 2.8f))
+            keys.add(Key(code = "SPACE", label = "Space", weight = 2.8f))
+            keys.add(Key(
+                code = ".",
+                label = ".",
+                secondaryLabel = "\u2026",
+                isFunctional = true,
+                weight = 1.0f,
+                longPressOptions = symbolLongPressMap["."]
+            ))
+            keys.add(Key(code = "ENTER", label = "Enter", isSpecialEnter = true, isFunctional = true, weight = 1.2f))
+        } else {
+            keys.add(Key(code = "ABC", label = "ABC", isFunctional = true, weight = 1.4f))
+            keys.add(Key(
+                code = ",",
+                label = ",",
+                isFunctional = true,
+                weight = 1.2f,
+                longPressOptions = symbolLongPressMap[","]
+            ))
+            keys.add(Key(code = "SPACE", label = "Space", weight = 5.5f))
+            keys.add(Key(
+                code = ".",
+                label = ".",
+                secondaryLabel = "\u2026",
+                isFunctional = true,
+                weight = 1.2f,
+                longPressOptions = symbolLongPressMap["."]
+            ))
+            keys.add(Key(code = "ENTER", label = "Enter", isSpecialEnter = true, isFunctional = true, weight = 1.4f))
+        }
     }
     private fun addSymbolKey(keys: MutableList<Key>, sym: String) {
         keys.add(Key(

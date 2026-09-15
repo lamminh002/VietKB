@@ -179,7 +179,10 @@ object RimeMap {
             val nucleus: String,
             val codas: Array<String>,
             val tnNew: Int,
-            val tnOld: Int = tnNew
+            val tnOld: Int = tnNew,
+            /** Tone position for the closed rime (coda present).  When
+             *  different from [tnNew] it encodes the terminated vs open distinction. */
+            val tnNewCoda: Int = tnNew
         )
 
         // Coda groups — exact pairs that actually exist in Vietnamese
@@ -196,6 +199,7 @@ object RimeMap {
         val C_OA5   = arrayOf("c","m","n","ng","p","t")               // oă (no p)
         val C_UE    = arrayOf("ch","n","nh","t")                          // ue, uê
         val C_UA4   = arrayOf("c","n","ng","t")                       // uâ
+        val C_UA    = arrayOf("n","ng","t")                            // ua
         val C_UY2   = arrayOf("p","t","ch","n","nh")              // uy
         val C_OO    = arrayOf("c","ng")                           // oo (coong, xoóc)
         val C_UYE   = arrayOf("n","t")                            // uye/uyê
@@ -205,7 +209,7 @@ object RimeMap {
         val NUCLEI = arrayOf(
             // ── Single vowels — tone on the vowel itself (pos 0) ──
             NucSpec("a",  C_ALL,   0), NucSpec("ă",  C_SHORT, 0),
-            NucSpec("â",  C_SHORT, 0), NucSpec("e",  C_SHORT, 0),
+            NucSpec("â",  C_SHORT, 0), NucSpec("e",  C_ALL,   0),
             NucSpec("ê",  C_ALL,   0), NucSpec("i",  C_I,     0),
             NucSpec("o",  C_SHORT, 0), NucSpec("ô",  C_SHORT, 0),
             NucSpec("ơ",  C_O5,    0), NucSpec("u",  C_SHORT, 0),
@@ -218,7 +222,7 @@ object RimeMap {
             NucSpec("oe", C_OE,    1, 0), NucSpec("ue", C_UE,   1, 0),
             NucSpec("uy", C_UY2,   1, 0), NucSpec("uâ", C_UA4,  1, 1),
             NucSpec("uê", C_UE,    1, 1), NucSpec("uô", C_SHORT,1, 1),
-            NucSpec("uo", C_SHORT, 1, 1), NucSpec("ua", C_NONE, 0),
+            NucSpec("uo", C_SHORT, 1, 1), NucSpec("ua", C_UA,   0, 0, tnNewCoda=1),
             NucSpec("ưa", C_NONE,  0),    NucSpec("uơ", C_NONE, 1),
             NucSpec("ươ", C_SHORT, 1, 1), NucSpec("ia", C_NONE, 0),
             NucSpec("ie", C_SHORT, 1, 1), NucSpec("iê", C_SHORT,1, 1),
@@ -282,7 +286,7 @@ object RimeMap {
                 // With a final consonant (coda), the tone always lands on the main
                 // vowel regardless of old/new placement style (hoàn, toán — never
                 // hòan/tóan). tnOld only differs for open rimes oa/oe/uy.
-                table.insert(rk, packData(1, 1, if (isStop) 1 else 0, spec.tnNew, spec.tnNew))
+                table.insert(rk, packData(1, 1, if (isStop) 1 else 0, spec.tnNewCoda, spec.tnNewCoda))
             }
         }
 

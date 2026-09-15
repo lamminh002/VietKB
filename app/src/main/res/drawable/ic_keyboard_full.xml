@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <!-- Wide Landscape Keyboard Frame -->
+    <path
+        android:pathData="M19 4H5C3.343 4 2 5.343 2 7v10c0 1.657 1.343 3 3 3h14c1.657 0 3-1.343 3-3V7c0-1.657-1.343-3-3-3Z"
+        android:fillColor="#00000000"
+        android:strokeColor="#FF000000"
+        android:strokeWidth="2.40"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round" />
+    <!-- Keys inside wide keyboard -->
+    <path
+        android:pathData="M6 8.5h2m2 0h2m2 0h2m2 0h2"
+        android:fillColor="#00000000"
+        android:strokeColor="#FF000000"
+        android:strokeWidth="2.40"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round" />
+    <path
+        android:pathData="M7 12h2m2 0h2m2 0h2"
+        android:fillColor="#00000000"
+        android:strokeColor="#FF000000"
+        android:strokeWidth="2.40"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round" />
+    <!-- Spacebar -->
+    <path
+        android:pathData="M7.5 15.5h9"
+        android:fillColor="#00000000"
+        android:strokeColor="#FF000000"
+        android:strokeWidth="2.40"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round" />
+</vector>

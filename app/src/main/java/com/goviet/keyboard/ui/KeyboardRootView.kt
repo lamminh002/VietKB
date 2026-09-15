@@ -243,7 +243,7 @@ class KeyboardRootView @JvmOverloads constructor(
     }
 
     private val prefChangeListener = android.content.SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
-        if (AppPreferences.isThemeKey(key)) {
+        if (AppPreferences.isThemeKey(key) || key == AppPreferences.PREF_LANDSCAPE_MODE) {
             render()
         }
     }
@@ -355,9 +355,9 @@ class KeyboardRootView @JvmOverloads constructor(
         val isLandscape = resources.configuration.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE
         val isTablet = resources.configuration.screenWidthDp >= 600
         val baseKeyboardHeightDp = if (isTablet) {
-            if (isLandscape) 205f else 280f
+            if (isLandscape) 190f else 280f
         } else {
-            if (isLandscape) 175f else 255f
+            if (isLandscape) 160f else 255f
         }
         val targetHeightPx = baseKeyboardHeightDp.dpPx(context)
         animateHeightTo(targetHeightPx)
@@ -377,6 +377,12 @@ class KeyboardRootView @JvmOverloads constructor(
     }
 
     private fun updatePanels(theme: KeyboardTheme, backgroundColor: Int, isDark: Boolean) {
+        val isLandscape = resources.configuration.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE
+        val landscapeMode = AppPreferences.getLandscapeMode()
+
+        standardLetterGrid.isLandscape = isLandscape
+        standardLetterGrid.landscapeMode = landscapeMode
+
         // 4. Update Panels visibility and configurations
         val allPanels: List<BaseKeyGridView> = listOf(
             standardLetterGrid,
@@ -402,6 +408,14 @@ class KeyboardRootView @JvmOverloads constructor(
             "SYMBOL_PICKER" -> symbolsPickerGrid
             else -> standardLetterGrid
         }
+
+        if (isLandscape && targetPanel != standardLetterGrid) {
+            val sideInset = (resources.displayMetrics.widthPixels * 0.15f).toInt()
+            panelContainer.setPadding(sideInset, 0, sideInset, 0)
+        } else {
+            panelContainer.setPadding(0, 0, 0, 0)
+        }
+
         val oldPanels = allPanels.filter { it != targetPanel }
 
         when (keyboardMode) {
@@ -668,6 +682,13 @@ class KeyboardRootView @JvmOverloads constructor(
     }
 
     private fun getNavigationBarPaddingPx(context: Context): Int {
+        val isLandscape = context.resources.configuration.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE
+        if (isLandscape) {
+            // Ở chế độ nằm ngang, chiều cao màn hình rất quý giá (~360-400dp).
+            // Hạ tối đa khoảng cách từ mép màn hình tới phím cách xuống mức tối thiểu (2dp).
+            return 2f.dpPx(context)
+        }
+
         val densityValue = context.density
         val navigationBarHeightRawDp = navigationBarHeightRaw / densityValue
         val isGestureMode = isGestureNavigationEnabled(context) || (navigationBarHeightRawDp < 20f)
@@ -1113,6 +1134,8 @@ class UnifiedTopHeaderView(context: Context, private val rootView: KeyboardRootV
                 IconDrawer.draw(canvas, context, "expand_more", hideCx, hideCy, 16f * density, textColor)
                 canvas.restore()
 
+                val isLandscape = resources.configuration.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE
+
                 // Shortcuts Area & Divider
                 if (toolbarProgress > 0f && !isBackMode) {
                     val dividerLeft = 44f * density + 2f * density
@@ -1141,16 +1164,29 @@ class UnifiedTopHeaderView(context: Context, private val rootView: KeyboardRootV
                     val shortcutsLeft = 48f * density
                     val shortcutsRight = w - backBtnWidth
                     val availableWidth = shortcutsRight - shortcutsLeft
-                    val itemWidth = availableWidth / 6f
 
-                    val shortcuts = listOf(
-                        ShortcutSpec("btn_clipboard", rootView.keyboardMode == "CLIPBOARD"),
-                        ShortcutSpec("btn_editpad", rootView.keyboardMode == "EDIT_PAD"),
-                        ShortcutSpec("btn_emoji", rootView.keyboardMode == "EMOJI"),
-                        ShortcutSpec("btn_language", false),
-                        ShortcutSpec("btn_tpad", rootView.keyboardMode == "TPAD"),
-                        ShortcutSpec("btn_settings", rootView.keyboardMode == "SETTINGS")
-                    )
+                    val shortcuts = if (isLandscape) {
+                        listOf(
+                            ShortcutSpec("btn_clipboard", rootView.keyboardMode == "CLIPBOARD"),
+                            ShortcutSpec("btn_editpad", rootView.keyboardMode == "EDIT_PAD"),
+                            ShortcutSpec("btn_emoji", rootView.keyboardMode == "EMOJI"),
+                            ShortcutSpec("btn_language", false),
+                            ShortcutSpec("btn_tpad", rootView.keyboardMode == "TPAD"),
+                            ShortcutSpec("btn_layout_mode", false),
+                            ShortcutSpec("btn_settings", rootView.keyboardMode == "SETTINGS")
+                        )
+                    } else {
+                        listOf(
+                            ShortcutSpec("btn_clipboard", rootView.keyboardMode == "CLIPBOARD"),
+                            ShortcutSpec("btn_editpad", rootView.keyboardMode == "EDIT_PAD"),
+                            ShortcutSpec("btn_emoji", rootView.keyboardMode == "EMOJI"),
+                            ShortcutSpec("btn_language", false),
+                            ShortcutSpec("btn_tpad", rootView.keyboardMode == "TPAD"),
+                            ShortcutSpec("btn_settings", rootView.keyboardMode == "SETTINGS")
+                        )
+                    }
+
+                    val itemWidth = availableWidth / shortcuts.size.toFloat()
 
                     val activeColor = accentColor
                     val inactiveColor = Color.argb(178, Color.red(textColor), Color.green(textColor), Color.blue(textColor))
@@ -1179,8 +1215,16 @@ class UnifiedTopHeaderView(context: Context, private val rootView: KeyboardRootV
                         iconPaint.alpha = (toolbarProgress * baseAlpha).toInt().coerceIn(0, 255)
                         iconPaint.strokeWidth = if (spec.isActive) 1.9f * density else 1.6f * density
 
-                        val shortcutId = spec.id.replace("btn_", "")
-                        IconDrawer.draw(canvas, context, shortcutId, animatedCx, specCy, 22f * density, iconPaint.color)
+                        val iconId = if (spec.id == "btn_layout_mode") {
+                            when (AppPreferences.getLandscapeMode()) {
+                                AppPreferences.LANDSCAPE_SPLIT -> "keyboard_split"
+                                AppPreferences.LANDSCAPE_COMPACT -> "keyboard_compact"
+                                else -> "keyboard_full"
+                            }
+                        } else {
+                            spec.id.replace("btn_", "")
+                        }
+                        IconDrawer.draw(canvas, context, iconId, animatedCx, specCy, 23f * density, iconPaint.color)
                     }
                 }
             }
@@ -1227,17 +1271,39 @@ class UnifiedTopHeaderView(context: Context, private val rootView: KeyboardRootV
                     return "hide"
                 }
 
+                val isLandscape = resources.configuration.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE
                 val isBackMode = (rootView.keyboardMode == "SETTINGS" || rootView.keyboardMode == "CLIPBOARD" || rootView.keyboardMode == "EDIT_PAD" || rootView.keyboardMode == "TPAD")
+
                 val shouldShowToolbar = toolbarProgress >= 0.99f && !isBackMode
                 if (shouldShowToolbar) {
                     val shortcutsLeft = 48f * density
                     val shortcutsRight = w - backBtnWidth
                     if (x >= shortcutsLeft && x <= shortcutsRight) {
                         val availableWidth = shortcutsRight - shortcutsLeft
-                        val itemWidth = availableWidth / 6f
+                        val shortcutsList = if (isLandscape) {
+                            listOf(
+                                "btn_clipboard",
+                                "btn_editpad",
+                                "btn_emoji",
+                                "btn_language",
+                                "btn_tpad",
+                                "btn_layout_mode",
+                                "btn_settings"
+                            )
+                        } else {
+                            listOf(
+                                "btn_clipboard",
+                                "btn_editpad",
+                                "btn_emoji",
+                                "btn_language",
+                                "btn_tpad",
+                                "btn_settings"
+                            )
+                        }
+                        val itemWidth = availableWidth / shortcutsList.size.toFloat()
                         val index = ((x - shortcutsLeft) / itemWidth).toInt()
-                        if (index in DrawerButton.ALL.indices) {
-                            return DrawerButton.ALL[index].id
+                        if (index in shortcutsList.indices) {
+                            return shortcutsList[index]
                         }
                     }
                 }
@@ -1266,6 +1332,22 @@ class UnifiedTopHeaderView(context: Context, private val rootView: KeyboardRootV
             }
             "hide" -> {
                 rootView.service.requestHideSelf(0)
+            }
+            "layout_mode", "btn_layout_mode" -> {
+                val current = AppPreferences.getLandscapeMode()
+                val next = when (current) {
+                    AppPreferences.LANDSCAPE_SPLIT -> AppPreferences.LANDSCAPE_COMPACT
+                    AppPreferences.LANDSCAPE_COMPACT -> AppPreferences.LANDSCAPE_FULL
+                    else -> AppPreferences.LANDSCAPE_SPLIT
+                }
+                AppPreferences.setLandscapeMode(next)
+                rootView.render()
+                val toastMsg = when (next) {
+                    AppPreferences.LANDSCAPE_SPLIT -> context.getString(R.string.toast_landscape_split)
+                    AppPreferences.LANDSCAPE_COMPACT -> context.getString(R.string.toast_landscape_compact)
+                    else -> context.getString(R.string.toast_landscape_full)
+                }
+                android.widget.Toast.makeText(context, toastMsg, android.widget.Toast.LENGTH_SHORT).show()
             }
             in DrawerButton.ALL.map { it.id } -> {
                 val btn = DrawerButton.ALL.first { it.id == id }
