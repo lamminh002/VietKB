@@ -16,11 +16,34 @@ package com.goviet.keyboard.engine
  */
 object RimeMap {
 
-    // ── Vietnamese rime character → 5-bit index encoding ──────────
-    //
-    // All 29 characters that appear in Vietnamese nuclei + codas.
-    // Index 0..27 = Vietnamese chars; 28 = PADDING (for shorter keys).
-    // 5 bits per char, max 5 chars → 25-bit key (fits Int).
+    data class NucSpec(
+        val nucleus: String,
+        val codas: Array<String>,
+        val tnNew: Int,
+        val tnOld: Int = tnNew,
+        /** Tone position for the closed rime (coda present).  When
+         *  different from [tnNew] it encodes the terminated vs open distinction. */
+        val tnNewCoda: Int = tnNew
+    )
+
+    val C_ALL   = arrayOf("c","ch","p","t","m","n","ng","nh")
+    val C_SHORT = arrayOf("c","p","t","m","n","ng")
+    val C_I     = arrayOf("ch","p","t","m","n","nh")
+    val C_O5    = arrayOf("p","t","m","n")
+    val C_U8    = arrayOf("c","m","n","ng","t")
+    val C_Y     = arrayOf("p","t","ch","n","nh")
+    val C_OE    = arrayOf("m","n","p","t")
+    val C_OA5   = arrayOf("c","m","n","ng","p","t")
+    val C_UE    = arrayOf("ch","n","nh","t")
+    val C_UA4   = arrayOf("c","n","ng","t")
+    val C_UA    = arrayOf("n","ng","t")
+    val C_UY2   = arrayOf("p","t","ch","n","nh")
+    val C_OO    = arrayOf("c","ng")
+    val C_UYE   = arrayOf("n","t")
+    val C_TMNG  = arrayOf("t","m","n","ng")
+    val C_NONE  = emptyArray<String>()
+
+    private lateinit var _nuclei: Array<NucSpec>
 
     /** Rime-alphabet character set: a ă â e ê i o ô ơ u ư y c g h m n p t + l r s j x q
      *  plus guard slots b d k v z.  The guard chars are never part of a valid rime
@@ -72,64 +95,24 @@ object RimeMap {
         return (length shl 25) or chars
     }
 
-    // ── Incremental key building (hot-path helpers) ───────────────
-    //
-    // Extend an existing rime key with additional characters without
-    // re-encoding the whole string — used in the composer's resegment loop.
-
-    // ── Flat map lookup table ─────────────────────────────────────
-    //
-    // Primitive IntArray+ByteArray tables — zero boxing, zero GC.
-    // Key encodes (length << 25) | (char-encoded rime) so strings of
-    // different lengths never collide.
-
     private const val TABLE_BITS = 14
-    private const val TABLE_SIZE = 1 shl TABLE_BITS   // 16384 slots
-    private const val TABLE_MASK = TABLE_SIZE - 1     // syllable-prefix table only
+    private const val TABLE_SIZE = 1 shl TABLE_BITS
+    private const val TABLE_MASK = TABLE_SIZE - 1
 
     private val table = IntFlatTable(TABLE_BITS)
-    private lateinit var _fold: LongArray    // per-nucleus fold targets (e/o/a + w-primary)
-    private lateinit var _foldW: IntArray    // per-nucleus w alt variant + flags
+    private lateinit var _fold: LongArray
+    private lateinit var _foldW: IntArray
 
-    // Vowel combination map: (nucleus, char) → combined nucleus
-    // Flatmap for vowel combinations: n1 + typed-vowel → compound nucleus.
-    // Auto-derived from NUCLEI raw→display at build() time.
     private const val COMB_BITS = 4
     private const val COMB_SIZE = 1 shl COMB_BITS
     private const val COMB_MASK = COMB_SIZE - 1
     private lateinit var _combineKeys: IntArray
     private lateinit var _combineVals: Array<String>
 
-    // Data byte layout:
-    //   bit 0: isPrefix  (valid prefix of some rime)
-    //   bit 1: isComplete (complete valid rime)
-    //   bit 2: isStop    (stop coda: c, ch, p, t)
-    //   bits 3-4: tonePosition (0-2)
-    //
-    // Fold-target tables (`_fold`, `_foldW`) carry Telex fold data as fields
-    // on the flat-map values — one O(1) lookup answers BOTH "what does this
-    // nucleus fold to" AND "where the tone lands".  No separate rule tables.
-    //
-    // `_fold[slot]` (nucleus entries only):
-    //   bits 0-15:  'e' fold code
-    //   bits 16-31: 'o' fold code
-    //   bits 32-47: 'a' fold code
-    //   bits 48-63: 'w' primary fold code
-    //
-    // `_foldW[slot]`:
-    //   bits 0-15:  'w' alt fold code (dual-variant uo→uơ/ươ)
-    //   bit 16:     primary code uses lookahead (ua/oa/uo)
-    //   bit 17:     alt code uses lookahead (uo)
-    //   bit 30:     nucleus is a w-compound display form (uơ/ươ/ưa/oă…)
-    //
-    // A 16-bit fold code:
-    //   bits 0-2:  primary position in nucleus
-    //   bits 3-7:  primary replacement char index (31 = invalid/none)
-    //   bits 8-10: secondary position (compound folds)
-    //   bits 11-15: secondary replacement char index (31 = none)
-
-    /** Initialize the flat map.  Called once at class load time. */
-    init { build() }
+    /** Initialize the flat map and syllable prefix table.  Called once at class load time. */
+    init { build()
+        generateSyllableTable()
+    }
 
     /** Canonical raw keystroke for nuclei where naive char-by-char is wrong.
      *  (w-compound: the w serves double duty — u+w→ư, then the following
@@ -161,53 +144,11 @@ object RimeMap {
         _fold = LongArray(TABLE_SIZE)
         _foldW = IntArray(TABLE_SIZE)
 
-        // ── Vowel combination map ──────────────────────────────────
         _combineKeys = IntArray(COMB_SIZE)
         _combineVals = arrayOf("", "", "", "", "", "", "", "",
                                "", "", "", "", "", "", "", "")
 
-
-        // ── Nuclei and their valid codas (from phonology table) ────
-        //
-        // Each NucSpec: nucleus string, valid codas, tone position index,
-        // and optional old-style tone position override.
-        // Tone position: 0 = vowel itself, 1 = digraph second char,
-        //                2 = trigraph middle char.
-        // "isStop": coda in {c, ch, p, t} → only acute/dot (sắc/nặng) tones allowed.
-
-        data class NucSpec(
-            val nucleus: String,
-            val codas: Array<String>,
-            val tnNew: Int,
-            val tnOld: Int = tnNew,
-            /** Tone position for the closed rime (coda present).  When
-             *  different from [tnNew] it encodes the terminated vs open distinction. */
-            val tnNewCoda: Int = tnNew
-        )
-
-        // Coda groups — exact pairs that actually exist in Vietnamese
-        // (verified against the 17,974-syllable corpus; NOT the full Cartesian product).
-        //   c/ch/p/t = stop codas → only acute/dot (sắc/nặng) tones
-        //   m/n/ng/nh = nasal codas → 6 tones
-        val C_ALL   = arrayOf("c","ch","p","t","m","n","ng","nh") // a, ê, oa
-        val C_SHORT = arrayOf("c","p","t","m","n","ng")           // ă, â, o, ô, u, uô, ươ, iê, uo, ie
-        val C_I     = arrayOf("ch","p","t","m","n","nh")          // i (no c, no ng)
-        val C_O5    = arrayOf("p","t","m","n")                    // ơ (no c, no ng)
-        val C_U8    = arrayOf("c","m","n","ng","t")               // ư (no p)
-        val C_Y     = arrayOf("p","t","ch","n","nh")              // y
-        val C_OE    = arrayOf("m","n","p","t")                        // oe
-        val C_OA5   = arrayOf("c","m","n","ng","p","t")               // oă (no p)
-        val C_UE    = arrayOf("ch","n","nh","t")                          // ue, uê
-        val C_UA4   = arrayOf("c","n","ng","t")                       // uâ
-        val C_UA    = arrayOf("n","ng","t")                            // ua
-        val C_UY2   = arrayOf("p","t","ch","n","nh")              // uy
-        val C_OO    = arrayOf("c","ng")                           // oo (coong, xoóc)
-        val C_UYE   = arrayOf("n","t")                            // uye/uyê
-        val C_TMNG  = arrayOf("t","m","n","ng")                   // ye/yê (pre-fold raw)
-        val C_NONE  = emptyArray<String>()
-
-        val NUCLEI = arrayOf(
-            // ── Single vowels — tone on the vowel itself (pos 0) ──
+        _nuclei = arrayOf(
             NucSpec("a",  C_ALL,   0), NucSpec("ă",  C_SHORT, 0),
             NucSpec("â",  C_SHORT, 0), NucSpec("e",  C_ALL,   0),
             NucSpec("ê",  C_ALL,   0), NucSpec("i",  C_I,     0),
@@ -215,9 +156,6 @@ object RimeMap {
             NucSpec("ơ",  C_O5,    0), NucSpec("u",  C_SHORT, 0),
             NucSpec("ư",  C_U8,    0), NucSpec("y",  C_Y,     0),
 
-            // ── Digraph nuclei — tone on main vowel (modern) ──────
-            // (glide + main). Tone position follows the s.ngonngu.net
-            // canonical table: oa/oai→a, oe→e, uy→y, iê/uô/ươ→2nd char.
             NucSpec("oa", C_ALL,   1, 0), NucSpec("oă", C_OA5,  1, 0),
             NucSpec("oe", C_OE,    1, 0), NucSpec("ue", C_UE,   1, 0),
             NucSpec("uy", C_UY2,   1, 0), NucSpec("uâ", C_UA4,  1, 1),
@@ -229,10 +167,8 @@ object RimeMap {
             NucSpec("ye", C_TMNG,  1, 1), NucSpec("yê", C_TMNG, 1, 1),
             NucSpec("oo", C_OO,    1, 1),
 
-            // ── Trigraph nuclei — tone on middle vowel (pos 2) ────
             NucSpec("uye", C_UYE,  2),    NucSpec("uyê", C_UYE, 2),
 
-            // ── Open rimes (no final consonant) ────────────────────
             NucSpec("ai",  C_NONE, 0), NucSpec("ao",  C_NONE, 0),
             NucSpec("au",  C_NONE, 0), NucSpec("ay",  C_NONE, 0),
             NucSpec("âu",  C_NONE, 0), NucSpec("ây",  C_NONE, 0),
@@ -255,10 +191,9 @@ object RimeMap {
             NucSpec("ueu", C_NONE, 1), NucSpec("uêu", C_NONE, 1),
         )
 
-        // ── Populate: all complete rimes + their prefixes ──────────
         val allRimes = mutableListOf<String>()
 
-        for (spec in NUCLEI) {
+        for (spec in _nuclei) {
             allRimes.add(spec.nucleus)
             val nucKey = rimeKey(spec.nucleus)
             val slot = table.insert(nucKey, packData(1, 1, 0, spec.tnNew, spec.tnOld))
@@ -283,9 +218,6 @@ object RimeMap {
                 allRimes.add(rime)
                 val rk = rimeKey(rime)
                 val isStop = c == "c" || c == "ch" || c == "p" || c == "t"
-                // With a final consonant (coda), the tone always lands on the main
-                // vowel regardless of old/new placement style (hoàn, toán — never
-                // hòan/tóan). tnOld only differs for open rimes oa/oe/uy.
                 table.insert(rk, packData(1, 1, if (isStop) 1 else 0, spec.tnNewCoda, spec.tnNewCoda))
             }
         }
@@ -297,25 +229,17 @@ object RimeMap {
             }
         }
 
-        // ── Vowel combination map (derived from raw→display of NUCLEI) ──
-        //
-        // For each nucleus N and each base vowel V, compute the raw keystroke
-        // for N+V; if it maps to a DIFFERENT display nucleus, that's a valid
-        // vowel combination (e.g. ư + raw('o') → raw("uw"+"o") = "uwo" → "ươ").
-        // All lookup is O(1) via the rawToDisplay flatmap — no hardcoded pairs.
-        val rawToDisplay = HashMap<String, String>(NUCLEI.size * 2)
-        for (spec in NUCLEI) rawToDisplay[rawKeyForNucleus(spec.nucleus)] = spec.nucleus
-        // Overrides win over any naive collisions (uơi/ươi share raw "uowi").
-        for (spec in NUCLEI) {
+        val rawToDisplay = HashMap<String, String>(_nuclei.size * 2)
+        for (spec in _nuclei) rawToDisplay[rawKeyForNucleus(spec.nucleus)] = spec.nucleus
+        for (spec in _nuclei) {
             val override = rawOverride(spec.nucleus.lowercase())
             if (override != null) rawToDisplay[override] = spec.nucleus
         }
         val plainVowels = charArrayOf('a', 'e', 'i', 'o', 'u')
-        for (spec in NUCLEI) {
+        for (spec in _nuclei) {
             val baseRaw = rawKeyForNucleus(spec.nucleus)
             for (v in plainVowels) {
                 val combined = rawToDisplay[baseRaw + v] ?: continue
-                // Skip no-op entries: plain extend already handles nucleus+v
                 if (combined == spec.nucleus + v) continue
                 combineInsert(spec.nucleus, v, combined)
             }
@@ -331,7 +255,6 @@ object RimeMap {
                 (tnNew shl 3) or (tnOld shl 5)
     }
 
-    // ── Vowel combination lookup ─────────────────────────────────
     private fun combineInsert(nucLower: String, charLower: Char, result: String) {
         val compositeKey = keyCat(nucLower, nucLower.length, charLower)
         var slot = (compositeKey * -0x61c88647).toInt() and COMB_MASK
@@ -467,15 +390,6 @@ object RimeMap {
         return ((baseLen + extLen) shl 25) or chars
     }
 
-    // ── Fold-target data (fields on the flat-map value) ───────────
-    //
-    // The Telex fold targets are baked into the map at build time, so the
-    // composer decides folds by lookup, not by if/else rule chains:
-    //   'a' → a/ă → â,  'e' → e → ê,  'o' → o/ơ → ô,
-    //   'w' → uo/uô → ươ|uơ, ua → ưa, oa → oă, and singles a→ă, o→ơ, u→ư.
-    // The uo→uơ fold-back guard ("uowo stays uơo") is expressed here as
-    // *absent* fold data on the "uơ" nucleus, not as a runtime comparison.
-
     private const val NO_FOLD_CHAR = 31
     private val CHAR_AT = RIME_ALPHA.toCharArray()
 
@@ -525,21 +439,21 @@ object RimeMap {
         val n = nuc.lowercase()
         val uo = n.indexOf("uo")
         if (uo >= 0) {
-            val prim = foldCode(uo, 'ư', uo + 1, 'ơ').toLong()   // ươ
-            val alt = foldCode(uo, 'u', uo + 1, 'ơ').toLong()    // uơ (anchor on u)
+            val prim = foldCode(uo, 'ư', uo + 1, 'ơ').toLong()
+            val alt = foldCode(uo, 'u', uo + 1, 'ơ').toLong()
             return prim or (alt shl 16) or (0b11L shl 32)
         }
         val uoHorn = n.indexOf("uô")
         if (uoHorn >= 0) {
-            val prim = foldCode(uoHorn, 'ư', uoHorn + 1, 'ơ').toLong()   // ươ
-            val alt = foldCode(uoHorn, 'u', uoHorn + 1, 'ơ').toLong()    // uơ
+            val prim = foldCode(uoHorn, 'ư', uoHorn + 1, 'ơ').toLong()
+            val alt = foldCode(uoHorn, 'u', uoHorn + 1, 'ơ').toLong()
             return prim or (alt shl 16) or (0b11L shl 32)
         }
-        if (n.contains("ươ")) return 0L                       // already horned — no-op
+        if (n.contains("ươ")) return 0L
         val ua = n.indexOf("ua")
-        if (ua >= 0) return foldCode(ua, 'ư').toLong() or (1L shl 32)    // ưa
+        if (ua >= 0) return foldCode(ua, 'ư').toLong() or (1L shl 32)
         val oa = n.indexOf("oa")
-        if (oa >= 0) return foldCode(oa + 1, 'ă').toLong() or (1L shl 32) // oă
+        if (oa >= 0) return foldCode(oa + 1, 'ă').toLong() or (1L shl 32)
         for (i in n.indices) {
             if (n[i] == 'u') {
                 val next = i + 1
@@ -551,7 +465,6 @@ object RimeMap {
         for (i in n.indices) {
             if (n[i] == 'o' && !(i > 0 && n[i - 1] == 'u')) return foldCode(i, 'ơ').toLong()
         }
-        // Hat→horn folds within vowel families: â→ă, ô→ơ
         val hatA = n.indexOf('â')
         if (hatA >= 0) return foldCode(hatA, 'ă').toLong()
         val hatO = n.indexOf('ô')
@@ -659,10 +572,6 @@ object RimeMap {
         return String(buf)
     }
 
-
-
-    // ── Vietnamese phonological utilities ──
-
     /** 12 Vietnamese base vowels (unaccented): a ă â e ê i o ô ơ u ư y. */
     val BASE_VOWELS = "aăâeêioôơuưy"
     private val BASE_VOWEL_SET = BooleanArray(512).also { arr ->
@@ -739,6 +648,28 @@ object RimeMap {
         return if (oldTonePlacement) toneOldAt(i) else toneNewAt(i)
     }
 
+    /** True when [onset] is the 'gi' onset — its final 'i' doubles as a nucleus. */
+    @JvmStatic
+    fun isGiOnset(cs: CharSequence, start: Int, length: Int): Boolean {
+        if (length < 2) return false
+        val last = cs[start + length - 1]
+        return last == 'i' || last == 'I'
+    }
+
+    @JvmStatic
+    fun isGiOnset(onset: CharSequence): Boolean = isGiOnset(onset, 0, onset.length)
+
+    /** True when [onset] starts with 'q' — the 'qu' cluster (its 'u' is never a nucleus). */
+    @JvmStatic
+    fun isQuOnset(cs: CharSequence, start: Int, length: Int): Boolean {
+        if (length == 0) return false
+        val first = cs[start]
+        return first == 'q' || first == 'Q'
+    }
+
+    @JvmStatic
+    fun isQuOnset(onset: CharSequence): Boolean = isQuOnset(onset, 0, onset.length)
+
     /**
      * Determine tone mark position with onset prefix preprocessing (qu/gi).
      */
@@ -752,10 +683,8 @@ object RimeMap {
         if (rimeLen > 1 && onsetLen > 0) {
             val isRimeFirstU = rime[0] == 'u' || rime[0] == 'U'
             val isRimeFirstI = rime[0] == 'i' || rime[0] == 'I'
-            val isQ = (onset[onsetLen - 1] == 'q' || onset[onsetLen - 1] == 'Q') ||
-                    (onsetLen >= 2 && (onset[onsetLen - 2] == 'q' || onset[onsetLen - 2] == 'Q') && (onset[onsetLen - 1] == 'u' || onset[onsetLen - 1] == 'U'))
-            val isG = (onset[onsetLen - 1] == 'g' || onset[onsetLen - 1] == 'G') ||
-                    (onsetLen >= 2 && (onset[onsetLen - 2] == 'g' || onset[onsetLen - 2] == 'G') && (onset[onsetLen - 1] == 'i' || onset[onsetLen - 1] == 'I'))
+            val isQ = isQuOnset(onset)
+            val isG = isGiOnset(onset)
             if (isRimeFirstU && isQ) { rimeStart = 1; offset = 1 }
             else if (isRimeFirstI && isG) { rimeStart = 1; offset = 1 }
         }
@@ -778,11 +707,7 @@ object RimeMap {
         return if (oldTonePlacement) toneOldAt(i) else toneNewAt(i)
     }
 
-
-    // ── Syllable prefix table (auto-generated from 18342 syllables) ──────
-    // Single source of truth for display-prefix
-    // validation (e.g. qu+ư invalid, onset+rime must be a prefix of a real syllable).
-    private val _sylTable = LongArray(TABLE_SIZE)
+    private lateinit var _sylTable: LongArray
 
     private fun sylPackKey(s: String): Long {
         if (s.isEmpty() || s.length > 10) return -1L
@@ -850,260 +775,58 @@ object RimeMap {
         }
         return sb.toString()
     }
-    private val EMBEDDED = arrayOf(
-        "a", "ac", "ach", "ai", "am", "an", "ang", "anh",
-        "ao", "ap", "at", "au", "ay", "b", "ba", "bac",
-        "bach", "bai", "bam", "ban", "bang", "banh", "bao", "bap",
-        "bat", "bau", "bay", "be", "bec", "bech", "bem", "ben",
-        "beng", "benh", "beo", "bep", "bet", "beu", "bi", "bia",
-        "bic", "bich", "bie", "biec", "biem", "bien", "bieng", "biep",
-        "biet", "bieu", "bim", "bin", "binh", "bip", "bit", "biu",
-        "bo", "boa", "boac", "boan", "boang", "boat", "boc", "boi",
-        "bom", "bon", "bong", "boo", "boon", "boong", "bop", "bot",
-        "bu", "bua", "buac", "buan", "buc", "bui", "bum", "bun",
-        "bung", "buo", "buoc", "buoi", "buom", "buon", "buong", "buop",
-        "buot", "buou", "bup", "but", "buu", "buy", "buye", "buyet",
-        "buyt", "by", "c", "ca", "cac", "cach", "cai", "cam",
-        "can", "cang", "canh", "cao", "cap", "cat", "cau", "cay",
-        "ce", "cem", "cen", "ceo", "cet", "ceu", "ch", "cha",
-        "chac", "chach", "chai", "cham", "chan", "chang", "chanh", "chao",
-        "chap", "chat", "chau", "chay", "che", "chec", "chech", "chem",
-        "chen", "cheng", "chenh", "cheo", "chep", "chet", "cheu", "chi",
-        "chia", "chic", "chich", "chie", "chiec", "chiem", "chien", "chieng",
-        "chiep", "chiet", "chieu", "chim", "chin", "chinh", "chip", "chit",
-        "chiu", "cho", "choa", "choac", "choai", "choan", "choang", "choat",
-        "choc", "choe", "choen", "choet", "choi", "chom", "chon", "chong",
-        "choo", "choon", "choong", "chop", "chot", "chu", "chua", "chuan",
-        "chuc", "chue", "chuec", "chuech", "chuen", "chuenh", "chui", "chum",
-        "chun", "chung", "chuo", "chuoc", "chuoi", "chuom", "chuon", "chuong",
-        "chuop", "chuot", "chup", "chut", "chuu", "chuy", "chuye", "chuyen",
-        "chuyet", "chy", "ci", "cia", "cic", "cich", "cie", "cien",
-        "cim", "cin", "cinh", "co", "coa", "coac", "coc", "coe",
-        "coen", "coi", "com", "con", "cong", "coo", "cooc", "coon",
-        "coong", "cop", "cot", "cu", "cua", "cuac", "cuc", "cue",
-        "cui", "cum", "cun", "cung", "cuo", "cuoc", "cuoi", "cuom",
-        "cuon", "cuong", "cuop", "cuot", "cup", "cut", "cuu", "cuy",
-        "cy", "d", "da", "dac", "dach", "dai", "dam", "dan",
-        "dang", "danh", "dao", "dap", "dat", "dau", "day", "de",
-        "dec", "dech", "dem", "den", "deng", "denh", "deo", "dep",
-        "det", "deu", "di", "dia", "dic", "dich", "die", "diec",
-        "diem", "dien", "dieng", "diep", "diet", "dieu", "dim", "din",
-        "dinh", "dip", "dit", "diu", "do", "doa", "doac", "doai",
-        "doan", "doang", "doanh", "doat", "doc", "doi", "dom", "don",
-        "dong", "dop", "dot", "du", "dua", "duan", "duat", "duc",
-        "due", "duen", "duenh", "dui", "dum", "dun", "dung", "duo",
-        "duoc", "duoi", "duom", "duon", "duong", "duot", "duou", "dup",
-        "dut", "duu", "duy", "duye", "duyen", "duyet", "dy", "dyn",
-        "e", "ec", "ech", "em", "en", "eng", "enh", "eo",
-        "ep", "et", "eu", "g", "ga", "gac", "gach", "gai",
-        "gam", "gan", "gang", "ganh", "gao", "gap", "gat", "gau",
-        "gay", "ge", "gem", "gen", "gh", "gha", "ghan", "ghanh",
-        "ghao", "ghap", "ghat", "ghe", "ghec", "ghech", "ghem", "ghen",
-        "ghenh", "gheo", "ghep", "ghet", "ghi", "ghia", "ghie", "ghiec",
-        "ghien", "ghim", "ghin", "ghinh", "ghip", "ghit", "gho", "ghot",
-        "ghu", "ghue", "gi", "gia", "giac", "giai", "giam", "gian",
-        "giang", "gianh", "giao", "giap", "giat", "giau", "giay", "gie",
-        "giec", "giem", "gien", "gieng", "gieo", "giep", "giet", "gieu",
-        "gii", "giie", "giiec", "giien", "gio", "gioa", "gioc", "gioi",
-        "gion", "giong", "giot", "giu", "giua", "giuc", "giue", "giui",
-        "gium", "giun", "giuo", "giuoc", "giuon", "giuong", "giup", "giut",
-        "giuu", "giy", "go", "goa", "goac", "goao", "goc", "goe",
-        "goeo", "goi", "gom", "gon", "gong", "goo", "goon", "goong",
-        "gop", "got", "gu", "gua", "guan", "guay", "guc", "gue",
-        "guet", "gui", "gum", "gun", "gung", "guo", "guoc", "guoi",
-        "guom", "guon", "guong", "guot", "gup", "gut", "guy", "guye",
-        "guyen", "guyet", "guyt", "h", "ha", "hac", "hach", "hai",
-        "ham", "han", "hang", "hanh", "hao", "hap", "hat", "hau",
-        "hay", "he", "hec", "hech", "hem", "hen", "heng", "henh",
-        "heo", "hep", "het", "heu", "hi", "hia", "hic", "hich",
-        "hie", "hiec", "hiem", "hien", "hieng", "hiep", "hiet", "hieu",
-        "him", "hin", "hinh", "hip", "hit", "hiu", "ho", "hoa",
-        "hoac", "hoach", "hoai", "hoam", "hoan", "hoang", "hoanh", "hoao",
-        "hoat", "hoay", "hoc", "hoe", "hoen", "hoet", "hoi", "hom",
-        "hon", "hong", "hoo", "hooc", "hop", "hot", "hu", "hua",
-        "huan", "huat", "huc", "hue", "huec", "huech", "huen", "huenh",
-        "hui", "hum", "hun", "hung", "huo", "huoc", "huoi", "huom",
-        "huon", "huong", "huot", "huou", "hup", "hut", "huu", "huy",
-        "huyc", "huych", "huye", "huyen", "huyet", "huyn", "huynh", "huyt",
-        "hy", "i", "ia", "ic", "ich", "ie", "iec", "iem",
-        "ien", "ieng", "iep", "iet", "ieu", "im", "in", "inh",
-        "ip", "it", "iu", "k", "ka", "kai", "kam", "kan",
-        "kang", "kanh", "kao", "kap", "kat", "kay", "ke", "kec",
-        "kech", "kem", "ken", "keng", "kenh", "keo", "kep", "ket",
-        "keu", "kh", "kha", "khac", "khach", "khai", "kham", "khan",
-        "khang", "khanh", "khao", "khap", "khat", "khau", "khay", "khe",
-        "khec", "khem", "khen", "kheng", "khenh", "kheo", "khep", "khet",
-        "kheu", "khi", "khia", "khic", "khich", "khie", "khiem", "khien",
-        "khieng", "khiep", "khiet", "khieu", "khin", "khinh", "khit", "khiu",
-        "kho", "khoa", "khoac", "khoai", "khoam", "khoan", "khoang", "khoanh",
-        "khoao", "khoat", "khoay", "khoc", "khoe", "khoen", "khoeo", "khoet",
-        "khoi", "khom", "khon", "khong", "khoo", "khoon", "khoong", "khop",
-        "khot", "khu", "khua", "khuan", "khuang", "khuat", "khuay", "khuc",
-        "khue", "khuec", "khuech", "khui", "khum", "khun", "khung", "khuo",
-        "khuoc", "khuoi", "khuon", "khuong", "khuot", "khuou", "khut", "khuu",
-        "khuy", "khuya", "khuye", "khuyen", "khuyet", "khuyn", "khuynh", "khuyp",
-        "khuyu", "khy", "khye", "khyen", "ki", "kia", "kic", "kich",
-        "kie", "kiem", "kien", "kieng", "kiep", "kiet", "kieu", "kim",
-        "kin", "kinh", "kip", "kit", "kiu", "ko", "koa", "koai",
-        "koay", "koc", "koe", "koeo", "koi", "kom", "kon", "kong",
-        "kop", "kot", "ku", "kua", "kuau", "kuc", "kue", "kuen",
-        "kuenh", "kui", "kum", "kun", "kung", "kuo", "kuoc", "kuon",
-        "kuong", "ky", "kye", "kyet", "l", "la", "lac", "lach",
-        "lai", "lam", "lan", "lang", "lanh", "lao", "lap", "lat",
-        "lau", "lay", "le", "lec", "lech", "lem", "len", "leng",
-        "lenh", "leo", "lep", "let", "leu", "li", "lia", "lic",
-        "lich", "lie", "liec", "liem", "lien", "lieng", "liep", "liet",
-        "lieu", "lim", "lin", "linh", "lip", "lit", "liu", "lo",
-        "loa", "loac", "loai", "loan", "loang", "loanh", "loat", "loay",
-        "loc", "loe", "loen", "loet", "loi", "lom", "lon", "long",
-        "loo", "loon", "loong", "lop", "lot", "lu", "lua", "luac",
-        "luan", "luat", "luay", "luc", "lue", "lui", "lum", "lun",
-        "lung", "luo", "luoc", "luoi", "luom", "luon", "luong", "luot",
-        "lup", "lut", "luu", "luy", "luya", "luyc", "luych", "luye",
-        "luyen", "luyn", "luynh", "ly", "m", "ma", "mac", "mach",
-        "mai", "mam", "man", "mang", "manh", "mao", "map", "mat",
-        "mau", "may", "me", "mec", "mech", "mem", "men", "meng",
-        "menh", "meo", "mep", "met", "meu", "mi", "mia", "mic",
-        "mich", "mie", "miem", "mien", "mieng", "miet", "mieu", "mim",
-        "min", "minh", "mip", "mit", "miu", "mo", "moa", "moao",
-        "moay", "moc", "moi", "mom", "mon", "mong", "moo", "mooc",
-        "moon", "moong", "mop", "mot", "mu", "mua", "muan", "muau",
-        "muc", "mue", "muen", "mui", "mum", "mun", "mung", "muo",
-        "muoc", "muoi", "muom", "muon", "muong", "muop", "muot", "muou",
-        "mup", "mut", "muu", "muy", "muya", "muye", "muyen", "my",
-        "mye", "myen", "myet", "n", "na", "nac", "nach", "nai",
-        "nam", "nan", "nang", "nanh", "nao", "nap", "nat", "nau",
-        "nay", "ne", "nec", "nech", "nem", "nen", "neng", "nenh",
-        "neo", "nep", "net", "neu", "ng", "nga", "ngac", "ngach",
-        "ngai", "ngam", "ngan", "ngang", "nganh", "ngao", "ngap", "ngat",
-        "ngau", "ngay", "nge", "ngec", "ngech", "ngen", "nget", "ngh",
-        "ngha", "nghan", "nghanh", "nghao", "nghau", "nghe", "nghec", "nghech",
-        "nghen", "nghenh", "ngheo", "nghet", "ngheu", "nghi", "nghia", "nghic",
-        "nghich", "nghie", "nghiem", "nghien", "nghieng", "nghiep", "nghiet", "nghieu",
-        "nghim", "nghin", "nghinh", "nghit", "nghiu", "ngho", "nghoo", "nghu",
-        "nghua", "nghui", "nghum", "nghun", "ngi", "ngia", "ngim", "ngiu",
-        "ngo", "ngoa", "ngoac", "ngoach", "ngoai", "ngoam", "ngoan", "ngoang",
-        "ngoanh", "ngoao", "ngoap", "ngoat", "ngoay", "ngoc", "ngoe", "ngoem",
-        "ngoen", "ngoeo", "ngoet", "ngoi", "ngom", "ngon", "ngong", "ngoo",
-        "ngoon", "ngoong", "ngop", "ngot", "ngu", "ngua", "nguan", "nguay",
-        "nguc", "ngue", "nguec", "nguech", "ngui", "ngum", "ngun", "ngung",
-        "nguo", "nguoc", "nguoi", "nguon", "nguong", "ngup", "ngut", "nguu",
-        "nguy", "nguye", "nguyen", "nguyet", "nguyt", "nguyu", "ngy", "ngye",
-        "ngyen", "nh", "nha", "nhac", "nhach", "nhai", "nham", "nhan",
-        "nhang", "nhanh", "nhao", "nhap", "nhat", "nhau", "nhay", "nhe",
-        "nhec", "nhech", "nhem", "nhen", "nhenh", "nheo", "nhep", "nhet",
-        "nheu", "nhi", "nhia", "nhic", "nhich", "nhie", "nhiec", "nhiem",
-        "nhien", "nhiep", "nhiet", "nhieu", "nhim", "nhin", "nhinh", "nhip",
-        "nhit", "nhiu", "nho", "nhoa", "nhoai", "nhoam", "nhoan", "nhoang",
-        "nhoap", "nhoat", "nhoay", "nhoc", "nhoe", "nhoen", "nhoet", "nhoi",
-        "nhom", "nhon", "nhong", "nhop", "nhot", "nhu", "nhua", "nhuan",
-        "nhuc", "nhue", "nhui", "nhum", "nhun", "nhung", "nhuo", "nhuoc",
-        "nhuom", "nhuon", "nhuong", "nhuot", "nhut", "nhuy", "nhuye", "nhuyen",
-        "nhy", "ni", "nia", "nic", "nich", "nie", "niem", "nien",
-        "nieng", "niep", "niet", "nieu", "nim", "nin", "ninh", "nip",
-        "nit", "niu", "no", "noa", "noan", "noc", "noe", "noen",
-        "noi", "nom", "non", "nong", "noo", "noon", "noong", "nop",
-        "not", "nu", "nua", "nuan", "nuay", "nuc", "nui", "num",
-        "nun", "nung", "nuo", "nuoc", "nuoi", "nuom", "nuon", "nuong",
-        "nuop", "nuot", "nup", "nut", "nuu", "nuy", "nuye", "nuyen",
-        "ny", "o", "oa", "oac", "oach", "oai", "oam", "oan",
-        "oang", "oanh", "oap", "oat", "oc", "oe", "oi", "om",
-        "on", "ong", "oo", "ooc", "oon", "oong", "op", "ot",
-        "p", "pa", "pac", "pai", "pam", "pan", "pang", "panh",
-        "pao", "pap", "pat", "pau", "pe", "pen", "peo", "pet",
-        "peu", "pi", "pia", "pie", "piec", "pim", "pin", "pit",
-        "po", "poc", "pom", "poo", "poon", "poong", "pop", "pu",
-        "pua", "pui", "pun", "puo", "puoc", "puoi", "put", "q",
-        "qu", "qua", "quac", "quach", "quai", "quam", "quan", "quang",
-        "quanh", "quao", "quap", "quat", "quau", "quay", "que", "quec",
-        "quech", "quen", "quenh", "queo", "quet", "queu", "qui", "quit",
-        "quo", "quoc", "quoi", "quon", "quong", "quot", "quy", "quyc",
-        "quych", "quye", "quyen", "quyet", "quyn", "quynh", "quyt", "r",
-        "ra", "rac", "rach", "rai", "ram", "ran", "rang", "ranh",
-        "rao", "rap", "rat", "rau", "ray", "re", "rec", "rech",
-        "rem", "ren", "reng", "renh", "reo", "rep", "ret", "reu",
-        "ri", "ria", "ric", "rich", "rie", "riem", "rien", "rieng",
-        "riet", "rieu", "rim", "rin", "rinh", "rip", "rit", "riu",
-        "ro", "roa", "roac", "roan", "roang", "roay", "roc", "roe",
-        "roet", "roi", "rom", "ron", "rong", "rop", "rot", "ru",
-        "rua", "ruan", "ruang", "ruat", "ruay", "ruc", "rue", "rui",
-        "rum", "run", "rung", "ruo", "ruoc", "ruoi", "ruom", "ruon",
-        "ruong", "ruot", "ruou", "rup", "rut", "ruu", "ruy", "ruye",
-        "ruyen", "ruyet", "ry", "ryn", "s", "sa", "sac", "sach",
-        "sai", "sam", "san", "sang", "sanh", "sao", "sap", "sat",
-        "sau", "say", "se", "sec", "sem", "sen", "senh", "seo",
-        "sep", "set", "seu", "si", "sia", "sic", "sich", "sie",
-        "siec", "siem", "sien", "sieng", "siet", "sieu", "sim", "sin",
-        "sinh", "sip", "sit", "siu", "so", "soa", "soac", "soai",
-        "soan", "soang", "soat", "soc", "soi", "som", "son", "song",
-        "soo", "sooc", "soon", "soong", "sop", "sot", "su", "sua",
-        "suan", "suat", "suau", "suc", "sue", "sui", "sum", "sun",
-        "sung", "suo", "suoc", "suoi", "suon", "suong", "suot", "sup",
-        "sut", "suu", "suy", "suye", "suyen", "suyt", "sy", "sye",
-        "syen", "t", "ta", "tac", "tach", "tai", "tam", "tan",
-        "tang", "tanh", "tao", "tap", "tat", "tau", "tay", "te",
-        "tec", "tech", "tem", "ten", "teng", "tenh", "teo", "tep",
-        "tet", "teu", "th", "tha", "thac", "thach", "thai", "tham",
-        "than", "thang", "thanh", "thao", "thap", "that", "thau", "thay",
-        "the", "thec", "thech", "them", "then", "thenh", "theo", "thep",
-        "thet", "theu", "thi", "thia", "thic", "thich", "thie", "thiec",
-        "thiem", "thien", "thieng", "thiep", "thiet", "thieu", "thim", "thin",
-        "thinh", "thip", "thit", "thiu", "tho", "thoa", "thoac", "thoai",
-        "thoan", "thoang", "thoat", "thoc", "thoe", "thoi", "thom", "thon",
-        "thong", "thoo", "thoon", "thoong", "thop", "thot", "thu", "thua",
-        "thuac", "thuan", "thuat", "thuc", "thue", "thuec", "thuech", "thui",
-        "thum", "thun", "thung", "thuo", "thuoc", "thuoi", "thuom", "thuon",
-        "thuong", "thuot", "thup", "thut", "thuu", "thuy", "thuye", "thuyen",
-        "thuyet", "ti", "tia", "tic", "tich", "tie", "tiec", "tiem",
-        "tien", "tieng", "tiep", "tiet", "tieu", "tim", "tin", "tinh",
-        "tip", "tit", "tiu", "to", "toa", "toac", "toai", "toan",
-        "toang", "toanh", "toat", "toay", "toc", "toe", "toen", "toet",
-        "toi", "tom", "ton", "tong", "too", "toon", "toong", "top",
-        "tot", "tr", "tra", "trac", "trach", "trai", "tram", "tran",
-        "trang", "tranh", "trao", "trap", "trat", "trau", "tray", "tre",
-        "trec", "trech", "trem", "tren", "treng", "trenh", "treo", "trep",
-        "tret", "treu", "tri", "tria", "tric", "trich", "trie", "trien",
-        "trieng", "triet", "trieu", "trin", "trinh", "trit", "triu", "tro",
-        "troc", "troi", "trom", "tron", "trong", "trop", "trot", "tru",
-        "trua", "truan", "truat", "truc", "trui", "trum", "trun", "trung",
-        "truo", "truoc", "truoi", "truom", "truon", "truong", "truot", "trut",
-        "truu", "truy", "truye", "truyen", "truyn", "try", "trye", "tryen",
-        "tu", "tua", "tuan", "tuat", "tuc", "tue", "tuec", "tuech",
-        "tuen", "tuenh", "tuet", "tui", "tum", "tun", "tung", "tuo",
-        "tuoc", "tuoi", "tuom", "tuon", "tuong", "tuop", "tuot", "tuou",
-        "tup", "tut", "tuu", "tuy", "tuya", "tuye", "tuyen", "tuyet",
-        "tuyn", "tuyp", "tuyt", "ty", "tye", "tyen", "u", "ua",
-        "uan", "uang", "uat", "uau", "uay", "uc", "ue", "uen",
-        "uet", "ui", "um", "un", "ung", "uo", "uoc", "uoi",
-        "uom", "uon", "uong", "uop", "uot", "uou", "up", "ut",
-        "uu", "uy", "uyc", "uych", "uye", "uyen", "uyet", "uyn",
-        "uynh", "v", "va", "vac", "vach", "vai", "vam", "van",
-        "vang", "vanh", "vao", "vap", "vat", "vau", "vay", "ve",
-        "vec", "vech", "vem", "ven", "veng", "venh", "veo", "vet",
-        "veu", "vi", "via", "vic", "vich", "vie", "viec", "viem",
-        "vien", "vieng", "viet", "vim", "vin", "vinh", "vip", "vit",
-        "viu", "vo", "voa", "voan", "voc", "voe", "voi", "vom",
-        "von", "vong", "voo", "vop", "vot", "vu", "vua", "vuc",
-        "vue", "vuet", "vui", "vum", "vun", "vung", "vuo", "vuoc",
-        "vuoi", "vuom", "vuon", "vuong", "vuot", "vut", "vuu", "vy",
-        "x", "xa", "xac", "xach", "xai", "xam", "xan", "xang",
-        "xanh", "xao", "xap", "xat", "xau", "xay", "xe", "xec",
-        "xech", "xem", "xen", "xeng", "xenh", "xeo", "xep", "xet",
-        "xeu", "xi", "xia", "xic", "xich", "xie", "xiec", "xiem",
-        "xien", "xieng", "xiep", "xiet", "xieu", "xim", "xin", "xinh",
-        "xip", "xit", "xiu", "xo", "xoa", "xoac", "xoach", "xoai",
-        "xoam", "xoan", "xoang", "xoanh", "xoat", "xoay", "xoc", "xoe",
-        "xoen", "xoet", "xoi", "xom", "xon", "xong", "xoo", "xoon",
-        "xoong", "xop", "xot", "xu", "xua", "xuan", "xuat", "xuay",
-        "xuc", "xue", "xuen", "xuenh", "xui", "xum", "xun", "xung",
-        "xuo", "xuoc", "xuoi", "xuom", "xuon", "xuong", "xuot", "xup",
-        "xut", "xuy", "xuya", "xuye", "xuyen", "xuyet", "xuyt", "xy",
-        "xyt", "y", "ye", "yem", "yen", "yeng", "yet", "yeu",
-        )
+    private fun onsetAllowsFirstVowel(onset: String, vowel: Char): Boolean {
+        if (isGiOnset(onset)) return true
+        if (isQuOnset(onset)) {
+            return vowel == 'a' || vowel == 'e' || vowel == 'i' ||
+                   vowel == 'o' || vowel == 'y'
+        }
+        return when (onset) {
+            "c" -> vowel == 'a' || vowel == 'ă' || vowel == 'â' ||
+                   vowel == 'o' || vowel == 'ô' || vowel == 'ơ' ||
+                   vowel == 'u' || vowel == 'ư'
+            "k" -> vowel == 'e' || vowel == 'ê' || vowel == 'i' || vowel == 'y'
+            "g" -> vowel == 'a' || vowel == 'ă' || vowel == 'â' ||
+                   vowel == 'o' || vowel == 'ô' || vowel == 'ơ' ||
+                   vowel == 'u' || vowel == 'ư'
+            "gh" -> vowel == 'e' || vowel == 'ê' || vowel == 'i'
+            "ng" -> vowel == 'a' || vowel == 'ă' || vowel == 'â' ||
+                    vowel == 'o' || vowel == 'ô' || vowel == 'ơ' ||
+                    vowel == 'u' || vowel == 'ư'
+            "ngh" -> vowel == 'e' || vowel == 'ê' || vowel == 'i'
+            else -> true
+        }
+    }
 
-    // ── Syllable prefix init ──────────────────────────────────
-    init {
-        for (prefix in EMBEDDED) sylInsert(sylPackKey(prefix))
+    /** Generate syllable prefix table from onset rules + _nuclei/codas. */
+    private fun generateSyllableTable() {
+        _sylTable = LongArray(TABLE_SIZE)
+        for (onset in OnsetMap.ALL_ONSETS) {
+            if (onset == "w") continue
+            sylInsert(sylPackKey(onset))
+            for (len in 1 until onset.length) {
+                sylInsert(sylPackKey(onset.substring(0, len)))
+            }
+        }
+        for (spec in _nuclei) sylInsert(sylPackKey(spec.nucleus))
+        for (onset in OnsetMap.ALL_ONSETS) {
+            if (onset == "w") continue
+            for (spec in _nuclei) {
+                val nuc = spec.nucleus
+                val firstChar = nuc[0].lowercaseChar()
+                if (!onsetAllowsFirstVowel(onset, firstChar)) continue
+                val syllable = if (isGiOnset(onset) && (nuc == "i" || nuc[0] == 'i')) {
+                    if (nuc == "i") "gi" else "gi" + nuc.substring(1)
+                } else {
+                    "$onset$nuc"
+                }
+                for (len in onset.length..syllable.length) sylInsert(sylPackKey(syllable.substring(0, len)))
+                for (coda in spec.codas) {
+                    val closed = syllable + coda
+                    for (len in onset.length..closed.length) sylInsert(sylPackKey(closed.substring(0, len)))
+                }
+            }
+        }
     }
 
 }

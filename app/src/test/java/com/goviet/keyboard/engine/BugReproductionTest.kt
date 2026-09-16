@@ -216,4 +216,44 @@ class BugReproductionTest {
         assertEquals("tư", engine.process("tw"))
     }
 
+    @Test
+    fun testGisA_shouldBe_gia() {
+        // g i s → gí, then 'a' must extend the nucleus to giá (tone on rime 'a')
+        assertEquals("giá", engine.process("gisa"))
+        assertEquals("già", engine.process("gifa"))
+        assertEquals("giả", engine.process("gira"))
+        assertEquals("giã", engine.process("gixa"))
+        assertEquals("giạ", engine.process("gija"))
+    }
+
+    @Test
+    fun testGii_locksSyllable() {
+        // gi onset already contains 'i'; a second 'i' cannot be a new nucleus,
+        // so the rest of the raw stays literal (gii, giienges)
+        assertEquals("gii", engine.process("gii"))
+        assertEquals("giie", engine.process("giie"))
+        assertEquals("giieng", engine.process("giieng"))
+        assertEquals("giienges", engine.process("giienges"))
+    }
+
+    @Test
+    fun testQuToneBeforeVowelStaysLiteral() {
+        // "qu" is a consonant cluster — its 'u' is never a nucleus, so a tone
+        // key before a vowel stays literal (qus, qusa), unlike "gi" (gisa).
+        assertEquals("qus", engine.process("qus"))
+        assertEquals("qusa", engine.process("qusa"))
+        assertEquals("qufa", engine.process("qufa"))
+        assertEquals("quu", engine.process("quu"))
+        // Tone after the rime vowel still transforms normally
+        assertEquals("quá", engine.process("quas"))
+    }
+
+    @Test
+    fun testToneKeyWithoutVowelStaysLiteral() {
+        // plain onsets have no vowel to anchor the tone → tone key stays literal
+        assertEquals("dsa", engine.process("dsa"))
+        assertEquals("dxa", engine.process("dxa"))
+        assertEquals("tja", engine.process("tja"))
+    }
+
 }
