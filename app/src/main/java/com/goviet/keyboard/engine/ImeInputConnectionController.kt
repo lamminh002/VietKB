@@ -541,14 +541,16 @@ class ImeInputConnectionController(
             val compiled = explicitCompiled ?: compileComposingText()
             if (isImmediateCommitMode()) {
                 val lastStr = lastSetComposingText ?: ""
-                if (lastStr.isNotEmpty() && compiled == lastStr.substring(0, lastStr.length - 1)) {
+                if (lastStr.isNotEmpty() && compiled.length == lastStr.length - 1 && lastStr.startsWith(compiled)) {
                     backspaceHandler.sendBackspaceEvents(ic, 1)
                 } else if (lastLenIfImmediate > 0) {
                     backspaceHandler.sendBackspaceEvents(ic, lastLenIfImmediate)
                 }
                 ic.commitText(compiled, 1)
             } else {
-                ic.setComposingText(compiled, 1)
+                if (compiled != lastSetComposingText) {
+                    ic.setComposingText(compiled, 1)
+                }
             }
             if (composingStartInEditor >= 0) {
                 if (composingCursorIndex != inputEngine.composingRawLength()) {
@@ -764,25 +766,18 @@ class ImeInputConnectionController(
      */
     fun compileRawDisplay(): String {
         if (!inputEngine.isComposing()) return ""
-        return VietnameseUnicode.applyCasingFromRaw(
-            inputEngine.toDisplayString(), inputEngine.composingRaw().toString())
+        inputEngine.toDisplayBuffer(displayBuf)
+        return VietnameseUnicode.applyCasingFromRaw(displayBuf, inputEngine.composingRaw())
     }
 
-    /**
-     * Compiles only the raw prefix [0, end) with the same casing rules as the
-     * full display. Used to map a raw caret to its display offset and to
-     * re-derive raw keystrokes after a grapheme-level composing backspace.
-     */
-    fun compilePrefixDisplay(raw: CharSequence, end: Int): String {
-        if (end <= 0) return ""
-        if (end >= raw.length) return compileRawDisplay()
+    /** Display caret offset (chars) for the current raw caret — zero-alloc. */
+    fun displayCursorIndex(): Int {
+        val raw = inputEngine.composingRaw()
+        val end = composingCursorIndex.coerceIn(0, inputEngine.composingRawLength())
+        if (end <= 0) return 0
         inputEngine.compileRaw(raw, inputEngine.composeAsVietnamese, displayBuf, end)
-        return VietnameseUnicode.applyCasingFromRaw(displayBuf.toStringVal(), raw.subSequence(0, end).toString())
+        return displayBuf.len
     }
-
-    /** Display caret offset (chars) for the current raw caret. */
-    fun displayCursorIndex(): Int = compilePrefixDisplay(
-        inputEngine.composingRaw(), composingCursorIndex.coerceIn(0, inputEngine.composingRawLength())).length
 
     /**
      * Maps a display offset back to the raw buffer offset. Used after display-level
@@ -798,17 +793,25 @@ class ImeInputConnectionController(
         if (displayOffset <= 0) return 0
         if (displayOffset >= display.length) return raw.length
         if (!vietnamese) return displayOffset.coerceAtMost(raw.length)
-        val target = display.substring(0, displayOffset)
         for (i in 0..raw.length) {
-            if (compilePrefixDisplay(raw, i) == target) return i
+            inputEngine.compileRaw(raw, inputEngine.composeAsVietnamese, displayBuf, i)
+            if (displayPrefixMatches(displayBuf, display, displayOffset)) return i
         }
         return displayOffset.coerceAtMost(raw.length)
+    }
+
+    private fun displayPrefixMatches(buf: OwnedBuffer, display: String, len: Int): Boolean {
+        if (buf.len != len) return false
+        for (j in 0 until len) {
+            if (buf[j] != display[j]) return false
+        }
+        return true
     }
 
     fun compileText(raw: String): String {
         if (raw.isEmpty()) return ""
         inputEngine.compileRaw(raw, vietnamese = true, displayBuf)
-        return VietnameseUnicode.applyCasingFromRaw(displayBuf.toStringVal(), raw)
+        return VietnameseUnicode.applyCasingFromRaw(displayBuf, raw)
     }
 
     private fun tryExpandMacro(raw: String, wordBreak: String): String? {

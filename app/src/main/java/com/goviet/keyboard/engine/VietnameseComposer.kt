@@ -126,6 +126,7 @@ class VietnameseComposer(var options: EngineOptions = EngineOptions()) {
     /** Test API: internal buffer + state for processKey. */
     private val processRaw = StringBuilder()
     private val processState = SyllableState()
+    private val syllableRenderBuf = OwnedBuffer()
 
     fun reset() {
         replayState.reset()
@@ -139,6 +140,11 @@ class VietnameseComposer(var options: EngineOptions = EngineOptions()) {
     /** Display string of the current interactive state. */
     fun toDisplayString(): String =
         processState.toDisplayString(options.oldTonePlacement)
+
+    /** Render the current interactive state into [out] without allocating a String. */
+    fun toDisplayBuffer(out: OwnedBuffer) {
+        processState.toDisplayBuffer(out, options.oldTonePlacement)
+    }
 
     /**
      * Generate deconstructed snapshots: adopt [word], replay keystroke by keystroke,
@@ -423,7 +429,7 @@ class VietnameseComposer(var options: EngineOptions = EngineOptions()) {
             (out.onset.isEmpty() || out.onset[0].lowercaseChar() != 'w')) {
             val wChar = if (c.isUpperCase()) 'Ư' else 'ư'
             val comboOk = out.onset.isEmpty() ||
-                RimeMap.isSyllableDisplayPrefixValid((out.onset + wChar).lowercase())
+                RimeMap.isSyllableDisplayPrefixValid(out.onset, wChar)
             if (comboOk) {
                 out.nucleus = wChar.toString()
                 ctx.nucKey = RimeMap.rimeKey(out.nucleus)
@@ -489,8 +495,7 @@ class VietnameseComposer(var options: EngineOptions = EngineOptions()) {
             val candidateKey = RimeMap.extendKeySingle(ctx.nucKey, c)
             if (RimeMap.isValidPrefix(candidateKey)) {
                 if (out.nucleus.isEmpty() && out.onset.isNotEmpty()) {
-                    val candidate = (out.onset + c).lowercase()
-                    if (!RimeMap.isSyllableDisplayPrefixValid(candidate)) {
+                    if (!RimeMap.isSyllableDisplayPrefixValid(out.onset, c)) {
                         lockLiteral(out, ctx, c)
                         return pos + 1
                     }
@@ -512,8 +517,7 @@ class VietnameseComposer(var options: EngineOptions = EngineOptions()) {
     private fun tryPlainVowel(c: Char, out: SyllableState, ctx: ScanCtx): Boolean {
         if (out.nucleus.isEmpty()) {
             if (out.onset.isNotEmpty()) {
-                val candidate = (out.onset + c).lowercase()
-                if (!RimeMap.isSyllableDisplayPrefixValid(candidate)) {
+                if (!RimeMap.isSyllableDisplayPrefixValid(out.onset, c)) {
                     return false
                 }
             }
@@ -709,7 +713,7 @@ class VietnameseComposer(var options: EngineOptions = EngineOptions()) {
 
     /** Inserts one Telex key at [index] of the composing raw and resegments. */
     fun insertComposingKey(index: Int, key: Char) {
-        processRaw.insert(index, key)
+        if (index >= processRaw.length) processRaw.append(key) else processRaw.insert(index, key)
         if (composeAsVietnamese) {
             resegment(processRaw, processState)
         } else {
@@ -769,7 +773,8 @@ class VietnameseComposer(var options: EngineOptions = EngineOptions()) {
             while (i < rawLen && !isBoundaryKey(raw[i])) i++
             val syllable = raw.subSequence(start, i)
             resegment(syllable, replayState)
-            out.append(replayState.toDisplayString(options.oldTonePlacement))
+            replayState.toDisplayBuffer(syllableRenderBuf, options.oldTonePlacement)
+            out.append(syllableRenderBuf)
         }
         replayState.reset()
     }
