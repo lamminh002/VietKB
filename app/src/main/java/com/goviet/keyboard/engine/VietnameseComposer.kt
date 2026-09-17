@@ -477,7 +477,7 @@ class VietnameseComposer(var options: EngineOptions = EngineOptions()) {
             if (foldIdx >= 0) {
                 ctx.fold.set(cLow, foldIdx, pos)
                 ctx.nucKey = RimeMap.rimeKey(out.nucleus)
-                ctx.rimeKey = RimeMap.keyCat(out.nucleus, out.nucleus.length, out.coda, out.coda.length)
+                ctx.rimeKey = RimeMap.extendKey(ctx.nucKey, out.coda, 0, out.coda.length)
                 ctx.justUntoggled = false
                 return pos + 1
             }
@@ -487,7 +487,7 @@ class VietnameseComposer(var options: EngineOptions = EngineOptions()) {
             if (combo != null) {
                 out.nucleus = combo
                 ctx.nucKey = RimeMap.rimeKey(out.nucleus)
-                ctx.rimeKey = RimeMap.keyCat(out.nucleus, out.nucleus.length, out.coda, out.coda.length)
+                ctx.rimeKey = RimeMap.extendKey(ctx.nucKey, out.coda, 0, out.coda.length)
                 return pos + 1
             }
         }
@@ -607,7 +607,7 @@ class VietnameseComposer(var options: EngineOptions = EngineOptions()) {
                         ctx.nucKey = RimeMap.rimeKey(out.nucleus)
                         ctx.fold.set(foldKey, RimeMap.foldPos(foldCode), pos + 1)
                         out.coda = extendedCoda
-                        ctx.rimeKey = RimeMap.keyCat(out.nucleus, out.nucleus.length, out.coda, out.coda.length)
+                        ctx.rimeKey = RimeMap.extendKey(ctx.nucKey, out.coda, 0, out.coda.length)
                         if (pos + 2 < len && RimeMap.isToneKey(raw[pos + 2].lowercaseChar())) {
                             val targetTone = Tone.fromKey(raw[pos + 2].lowercaseChar())
                             if (targetTone != null && targetTone != Tone.NONE) {
@@ -750,11 +750,13 @@ class VietnameseComposer(var options: EngineOptions = EngineOptions()) {
         return processState.toDisplayString(options.oldTonePlacement)
     }
 
+    /** Compile raw into an existing buffer — avoids allocation per call. */
     fun compileRaw(raw: CharSequence, vietnamese: Boolean, out: OwnedBuffer) {
-        compileRaw(raw, vietnamese, out, Int.MAX_VALUE)
+compileRawInto(raw, vietnamese, out, raw.length)
     }
 
-    fun compileRaw(raw: CharSequence, vietnamese: Boolean, out: OwnedBuffer, maxLen: Int) {
+    /** Compile raw into an existing buffer — avoids allocation per call. */
+    fun compileRawInto(raw: CharSequence, vietnamese: Boolean, out: OwnedBuffer, maxLen: Int = raw.length) {
         out.clear()
         val rawLen = maxLen.coerceAtMost(raw.length)
         if (rawLen == 0) return
@@ -900,7 +902,7 @@ class VietnameseComposer(var options: EngineOptions = EngineOptions()) {
 
     fun process(raw: String): String {
         if (raw.isEmpty()) return ""
-        compileRaw(raw, true, stringOut)
+        compileRawInto(raw, true, stringOut)
         return stringOut.toStringVal()
     }
 
