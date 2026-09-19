@@ -40,7 +40,7 @@ object OnsetMap {
         "b", "c", "d", "đ", "g", "h", "k", "l", "m", "n", "p", "r", "s", "t", "v", "w", "x"
     )
 
-    private const val TABLE_BITS = 11
+    private const val TABLE_BITS = 7
     private const val TABLE_SIZE = 1 shl TABLE_BITS
 
     private val table = IntFlatTable(TABLE_BITS)
@@ -100,7 +100,6 @@ object OnsetMap {
 
     private val CONSONANT_BOOL = BooleanArray(512).also { arr ->
         for (o in ALL_ONSETS) arr[o[0].lowercaseChar().code] = true
-        arr['q'.lowercaseChar().code] = true
     }
 
     /** True if [c] is a valid onset char or the first char of a compound onset. */
@@ -169,6 +168,28 @@ object OnsetMap {
         val i = table.find(onsetKey(onset, start, length))
         return i >= 0 && (table.data[i].toInt() and 1) != 0
     }
+
+    /** True when [onset] is the 'gi' onset — its final 'i' doubles as a nucleus. */
+    @JvmStatic
+    fun isGiOnset(cs: CharSequence, start: Int, length: Int): Boolean {
+        if (length < 2) return false
+        val last = cs[start + length - 1]
+        return last == 'i' || last == 'I'
+    }
+
+    @JvmStatic
+    fun isGiOnset(onset: CharSequence): Boolean = isGiOnset(onset, 0, onset.length)
+
+    /** True when [onset] starts with 'q' — the 'qu' cluster (its 'u' is never a nucleus). */
+    @JvmStatic
+    fun isQuOnset(cs: CharSequence, start: Int, length: Int): Boolean {
+        if (length == 0) return false
+        val first = cs[start]
+        return first == 'q' || first == 'Q'
+    }
+
+    @JvmStatic
+    fun isQuOnset(onset: CharSequence): Boolean = isQuOnset(onset, 0, onset.length)
 
     /**
      * True when the open rime "uơ" is valid after this onset

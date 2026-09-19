@@ -102,6 +102,7 @@ object RimeMap {
     private val table = IntFlatTable(TABLE_BITS)
     private lateinit var _fold: LongArray
     private lateinit var _foldW: IntArray
+    private lateinit var _sylTable: LongArray
 
     private const val COMB_BITS = 4
     private const val COMB_SIZE = 1 shl COMB_BITS
@@ -269,7 +270,7 @@ object RimeMap {
      * O(1) flatmap lookup, zero boxing.
      */
     @JvmStatic
-    fun combineNucleus(nucleus: String, char: Char): String? {
+    fun combineNucleus(nucleus: CharSequence, char: Char): String? {
         val compositeKey = keyCat(nucleus, nucleus.length, char)
         var slot = (compositeKey * -0x61c88647).toInt() and COMB_MASK
         while (true) {
@@ -657,67 +658,10 @@ object RimeMap {
         return if (oldTonePlacement) toneOldAt(i) else toneNewAt(i)
     }
 
-    /** True when [onset] is the 'gi' onset — its final 'i' doubles as a nucleus. */
-    @JvmStatic
-    fun isGiOnset(cs: CharSequence, start: Int, length: Int): Boolean {
-        if (length < 2) return false
-        val last = cs[start + length - 1]
-        return last == 'i' || last == 'I'
-    }
 
-    @JvmStatic
-    fun isGiOnset(onset: CharSequence): Boolean = isGiOnset(onset, 0, onset.length)
-
-    /** True when [onset] starts with 'q' — the 'qu' cluster (its 'u' is never a nucleus). */
-    @JvmStatic
-    fun isQuOnset(cs: CharSequence, start: Int, length: Int): Boolean {
-        if (length == 0) return false
-        val first = cs[start]
-        return first == 'q' || first == 'Q'
-    }
-
-    @JvmStatic
-    fun isQuOnset(onset: CharSequence): Boolean = isQuOnset(onset, 0, onset.length)
-
-    /**
-     * Determine tone mark position with onset prefix preprocessing (qu/gi).
-     */
-    @JvmStatic
-    fun findTonePosition(onset: CharSequence, rime: CharSequence, oldTonePlacement: Boolean): Int? {
-        val onsetLen = onset.length
-        val rimeLen = rime.length
-        if (rimeLen == 0) return null
-        var rimeStart = 0
-        var offset = 0
-        if (rimeLen > 1 && onsetLen > 0) {
-            val isRimeFirstU = rime[0] == 'u' || rime[0] == 'U'
-            val isRimeFirstI = rime[0] == 'i' || rime[0] == 'I'
-            val isQ = isQuOnset(onset)
-            val isG = isGiOnset(onset)
-            if (isRimeFirstU && isQ) { rimeStart = 1; offset = 1 }
-            else if (isRimeFirstI && isG) { rimeStart = 1; offset = 1 }
-        }
-        val k = rimeKey(rime, rimeStart, rimeLen - rimeStart)
-        val i = indexOf(k)
-        if (i < 0) return null
-        val basePos = if (oldTonePlacement) toneOldAt(i) else toneNewAt(i)
-        return basePos + offset
-    }
-
-    /**
-     * Get tone position for a rime (no onset preprocessing).
-     */
-    @JvmStatic
-    fun rawTonePosition(rime: CharSequence, oldTonePlacement: Boolean, start: Int = 0, length: Int = rime.length - start): Int {
-        if (length == 0) return 0
-        val k = rimeKey(rime, start, length)
-        val i = indexOf(k)
-        if (i < 0) return 0
-        return if (oldTonePlacement) toneOldAt(i) else toneNewAt(i)
-    }
-
-    private lateinit var _sylTable: LongArray
-
+    /** Pack a lower-case syllable string into a flat-table Long key — zero
+     *  allocation (5-bit char + length prefix in the top bits).  Arity-1
+     *  helper shared by the O(1) prefix/syllable hash table. */
     private fun sylPackKey(s: String): Long {
         if (s.isEmpty() || s.length > 10) return -1L
         var key = s.length.toLong() shl 55
@@ -821,8 +765,8 @@ object RimeMap {
         return sb.toString()
     }
     private fun onsetAllowsFirstVowel(onset: String, vowel: Char): Boolean {
-        if (isGiOnset(onset)) return true
-        if (isQuOnset(onset)) {
+        if (OnsetMap.isGiOnset(onset)) return true
+        if (OnsetMap.isQuOnset(onset)) {
             return vowel == 'a' || vowel == 'e' || vowel == 'i' ||
                    vowel == 'o' || vowel == 'y'
         }
@@ -860,7 +804,7 @@ object RimeMap {
                 val nuc = spec.nucleus
                 val firstChar = nuc[0].lowercaseChar()
                 if (!onsetAllowsFirstVowel(onset, firstChar)) continue
-                val syllable = if (isGiOnset(onset) && (nuc == "i" || nuc[0] == 'i')) {
+                val syllable = if (OnsetMap.isGiOnset(onset) && (nuc == "i" || nuc[0] == 'i')) {
                     if (nuc == "i") "gi" else "gi" + nuc.substring(1)
                 } else {
                     "$onset$nuc"

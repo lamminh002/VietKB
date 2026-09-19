@@ -68,6 +68,40 @@ class OwnedBuffer : CharSequence {
         if (newLen in 0..len) len = newLen
     }
 
+    /** Replace content with a copy of [cs]. */
+    fun setTo(cs: CharSequence) {
+        clear()
+        append(cs)
+    }
+
+    /** Replace content with the slice of [cs] in [start, end). */
+    fun setTo(cs: CharSequence, start: Int, end: Int) {
+        clear()
+        append(cs, start, end)
+    }
+
+    /** Replace content with a single char. */
+    fun setTo(c: Char) {
+        clear()
+        append(c)
+    }
+
+    /** Content equality with another CharSequence — no allocation. */
+    fun contentEquals(other: CharSequence): Boolean {
+        if (len != other.length) return false
+        for (i in 0 until len) {
+            if (chars[i] != other[i]) return false
+        }
+        return true
+    }
+
+    /** In-place replace of every [old] char with [newChar]. */
+    fun replaceAll(old: Char, newChar: Char) {
+        for (i in 0 until len) {
+            if (chars[i] == old) chars[i] = newChar
+        }
+    }
+
     override val length: Int get() = len
 
     override operator fun get(index: Int): Char = chars[index]

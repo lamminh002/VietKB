@@ -815,9 +815,6 @@ class VietnameseComposerTest {
         assertTrue(RimeMap.isComplete(RimeMap.rimeKey("oang")))
 
         // Test qu and gi preprocessing
-        assertEquals(1, RimeMap.findTonePosition("qu", "ua", false)) // qu + ua -> offset 1, idx 0 -> 1 (quá)
-        assertEquals(1, RimeMap.findTonePosition("gi", "ia", false)) // gi + ia -> offset 1, idx 0 -> 1 (giá)
-        assertEquals(1, RimeMap.findTonePosition("th", "uơ", false)) // uơ -> 1 in rime
     }
 
     @Test
