@@ -211,8 +211,7 @@ object RimeMap {
             _foldW[slot] =
                 (wAlt and 0xFFFF) or
                 (if (wPrimaryLA) (1 shl 16) else 0) or
-                (if (wAltLA) (1 shl 17) else 0) or
-                (if (isUoCompoundForm(spec.nucleus)) (1 shl 30) else 0)
+                (if (wAltLA) (1 shl 17) else 0)
 
             for (c in spec.codas) {
                 val rime = spec.nucleus + c
@@ -474,13 +473,6 @@ object RimeMap {
         return 0L
     }
 
-    /** True if [nuc] is a uo-family w-compound (uơ/ươ or derivative) whose
-     *  repeated 'w' must be absorbed instead of untoggled. */
-    private fun isUoCompoundForm(nuc: String): Boolean {
-        val n = nuc.lowercase()
-        return n.contains("ươ") || n.contains("uơ")
-    }
-
     /**
      * Slot for [nucleusKey], or -1 when absent.  All fold data for a nucleus is
      * read through this single lookup — the accessors below only unpack the
@@ -513,12 +505,6 @@ object RimeMap {
     @JvmStatic
     fun foldWPrimaryLookahead(slot: Int): Boolean =
         slot >= 0 && (_foldW[slot] and (1 shl 16)) != 0
-
-    /** True when a repeated 'w' after the w-compound at [slot] cannot untoggle:
-     *  it is released as literal text (uo-family uơ/ươ: uoww → uơw). */
-    @JvmStatic
-    fun foldWRepeatLiteral(slot: Int): Boolean =
-        slot >= 0 && (_foldW[slot] and (1 shl 30)) != 0
 
     /** Position where the fold lands (untoggle anchor). */
     @JvmStatic
@@ -635,13 +621,6 @@ object RimeMap {
     fun isStopCoda(rime: CharSequence, start: Int = 0, length: Int = rime.length - start): Boolean {
         if (length == 0) return false
         return isStop(rimeKey(rime, start, length))
-    }
-
-    /** Validate that a rime string is valid for a specific tone. */
-    @JvmStatic
-    fun isRimeValidForTone(rime: String, tone: Tone): Boolean {
-        if (rime.isEmpty()) return false
-        return isValidPrefixWithTone(rimeKey(rime), tone.index)
     }
 
     /** Validate that a rime (by precomputed flat-table key) is valid for a specific tone. */
