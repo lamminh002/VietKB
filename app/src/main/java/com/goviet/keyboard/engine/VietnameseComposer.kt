@@ -123,6 +123,7 @@ class VietnameseComposer(var options: EngineOptions = EngineOptions()) {
 
     private val replayState = SyllableState()
     private val stringOut = OwnedBuffer()
+    private val scanCtx = ScanCtx(0)
 
     /** Test API: internal buffer + state for processKey. */
     private val processRaw = StringBuilder()
@@ -221,7 +222,8 @@ class VietnameseComposer(var options: EngineOptions = EngineOptions()) {
         out.reset()
         if (raw.isEmpty()) return
         matchOnset(raw, out)
-        scanBody(raw, out, ScanCtx(if (out.onset.isEmpty()) 0 else OnsetMap.onsetKeyOf(out.onset)))
+        scanCtx.reset(if (out.onset.isEmpty()) 0 else OnsetMap.onsetKeyOf(out.onset))
+        scanBody(raw, out, scanCtx)
     }
 
     /** Test API: resegment [raw] into a fresh state (the resegment the kernel
@@ -250,7 +252,9 @@ class VietnameseComposer(var options: EngineOptions = EngineOptions()) {
         fun clear() { key = '\u0000'; nucIdx = -1; rawPos = -1; standalone = false; plainNucleus = "" }
     }
 
-    /** Per-call scan memory — 6 fields + fold anchor (was 12 loose fields). */
+    /** Per-call scan memory — 6 fields + fold anchor (was 12 loose fields).
+     *  Reused across resegments (see [scanCtx]) so no object is allocated on
+     *  the per-keypress path.  Only safe because resegment is never re-entrant. */
     private class ScanCtx(
         var oKey: Int,
         var nucKey: Int = 0,
@@ -258,11 +262,24 @@ class VietnameseComposer(var options: EngineOptions = EngineOptions()) {
         var lastToneKey: Char = '\u0000',
         var syllableLocked: Boolean = false,
         var justUntoggled: Boolean = false,
-        var fold: FoldAnchor = FoldAnchor(),
+        val fold: FoldAnchor = FoldAnchor(),
         var pendingTone: Tone = Tone.NONE,
         var pendingToneKey: Char = '\u0000',
         var pendingUo: Boolean = false
-    )
+    ) {
+        fun reset(oKey: Int) {
+            this.oKey = oKey
+            nucKey = 0
+            rimeKey = 0
+            lastToneKey = '\u0000'
+            syllableLocked = false
+            justUntoggled = false
+            fold.clear()
+            pendingTone = Tone.NONE
+            pendingToneKey = '\u0000'
+            pendingUo = false
+        }
+    }
 
     /**
      * Phase 1 — longest valid onset prefix.  Single vowels are never onsets; with
@@ -631,31 +648,44 @@ class VietnameseComposer(var options: EngineOptions = EngineOptions()) {
         val primNuc = RimeMap.applyFold(nuc, primary)
         val altNuc = RimeMap.applyFold(nuc, alt)
 
-        fun pickVariant(coda: CharSequence): String? {
-            val pv = isValidRime(primNuc, coda)
-            val av = isValidRime(altNuc, coda)
-            if (pv != av) return if (pv) primNuc else altNuc
-            if (!pv) return null
-            val vt = predictVowelTail(raw, rawPos + 1)
-            if (vt.isNotEmpty()) {
-                val primKey = RimeMap.keyCat(primNuc, primNuc.length, vt, vt.length)
-                val altKey = RimeMap.keyCat(altNuc, altNuc.length, vt, vt.length)
-                val pe = RimeMap.isValidPrefix(RimeMap.extendKey(primKey, out.coda, 0, out.coda.length))
-                val ae = RimeMap.isValidPrefix(RimeMap.extendKey(altKey, out.coda, 0, out.coda.length))
-                if (pe != ae) return if (pe) primNuc else altNuc
-            }
-            val openUoOk = out.onset.isEmpty() || OnsetMap.allowsOpenUo(out.onset)
-            return if (out.coda.isNotEmpty() || !openUoOk) primNuc else altNuc
-        }
-
         val candCoda = out.coda.toStringVal() + tail
-        var chosen = pickVariant(candCoda)
+        var chosen = pickWVariant(candCoda, primNuc, altNuc, raw, rawPos, out)
         if (chosen == null && tail.isNotEmpty()) {
-            chosen = pickVariant(out.coda)
+            chosen = pickWVariant(out.coda, primNuc, altNuc, raw, rawPos, out)
         }
         if (chosen == null) return -1
         out.nucleus.setTo(chosen)
         return RimeMap.foldPos(primary)
+    }
+
+    /**
+     * Pick the w-fold variant for a dual-variant (uo/uô) compound: when exactly
+     * one folded form is a valid rime for [coda] take it; when both are valid use
+     * the predicted vowel tail to break the tie; otherwise prefer the uo-family
+     * rule (open ươ without a coda, closed uơ with one).
+     */
+    private fun pickWVariant(
+        coda: CharSequence,
+        primNuc: String,
+        altNuc: String,
+        raw: CharSequence,
+        rawPos: Int,
+        out: SyllableState
+    ): String? {
+        val pv = isValidRime(primNuc, coda)
+        val av = isValidRime(altNuc, coda)
+        if (pv != av) return if (pv) primNuc else altNuc
+        if (!pv) return null
+        val vt = predictVowelTail(raw, rawPos + 1)
+        if (vt.isNotEmpty()) {
+            val primKey = RimeMap.keyCat(primNuc, primNuc.length, vt, vt.length)
+            val altKey = RimeMap.keyCat(altNuc, altNuc.length, vt, vt.length)
+            val pe = RimeMap.isValidPrefix(RimeMap.extendKey(primKey, out.coda, 0, out.coda.length))
+            val ae = RimeMap.isValidPrefix(RimeMap.extendKey(altKey, out.coda, 0, out.coda.length))
+            if (pe != ae) return if (pe) primNuc else altNuc
+        }
+        val openUoOk = out.onset.isEmpty() || OnsetMap.allowsOpenUo(out.onset)
+        return if (out.coda.isNotEmpty() || !openUoOk) primNuc else altNuc
     }
 
     private fun isValidRime(nucleus: String, coda: CharSequence): Boolean {
@@ -725,11 +755,6 @@ class VietnameseComposer(var options: EngineOptions = EngineOptions()) {
     }
 
     /** Compile raw into an existing buffer — avoids allocation per call. */
-    fun compileRaw(raw: CharSequence, vietnamese: Boolean, out: OwnedBuffer) {
-compileRawInto(raw, vietnamese, out, raw.length)
-    }
-
-    /** Compile raw into an existing buffer — avoids allocation per call. */
     fun compileRawInto(raw: CharSequence, vietnamese: Boolean, out: OwnedBuffer, maxLen: Int = raw.length) {
         out.clear()
         val rawLen = maxLen.coerceAtMost(raw.length)
@@ -755,14 +780,9 @@ compileRawInto(raw, vietnamese, out, raw.length)
         replayState.reset()
     }
 
-    private fun isBoundaryKey(c: Char): Boolean {
-        return c == ' ' || c == '\n' || c == '\t' || c == '\r' || c == '.' || c == '?' || c == '!' ||
-            c == ',' || c == ';' || c == ':' || c == '-' || c == '/' || c == '(' || c == ')' ||
-            c == '[' || c == ']' || c == '{' || c == '}' || c == '"' || c == '\'' || c == '«' ||
-            c == '»' || c == '`' || c == '~' || c == '@' || c == '#' || c == '$' || c == '%' ||
-            c == '^' || c == '&' || c == '*' || c == '_' || c == '=' || c == '+' || c == '|' ||
-            c == '\\' || c == '<' || c == '>'
-    }
+    /** Single source for syllable-breaking characters, shared with the UI. */
+    private fun isBoundaryKey(c: Char): Boolean =
+        BoundaryClassifier.isBoundaryChar(c)
 
     fun adoptWord(word: String): AdoptResult? {
         if (word.isEmpty()) return null

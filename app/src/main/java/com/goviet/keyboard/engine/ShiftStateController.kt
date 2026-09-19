@@ -38,8 +38,6 @@ object BoundaryClassifier {
 
     fun isWhitespace(c: Char): Boolean = classify(c) == InputBoundary.WHITESPACE
 
-    fun isHardBreak(c: Char): Boolean = classify(c) == InputBoundary.HARD_BREAK
-
     fun isSentenceTerminator(c: Char): Boolean = classify(c) == InputBoundary.SENTENCE_TERMINATOR
 
     fun isSentenceTerminator(key: String): Boolean {
