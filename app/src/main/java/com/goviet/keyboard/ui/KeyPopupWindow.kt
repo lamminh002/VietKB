@@ -33,9 +33,86 @@ class KeyPopupWindow(private val context: Context) {
 
     private var currentMode: Mode = Mode.PREVIEW
 
+    // Lightweight copy of the last long-press geometry so the touch handler can
+    // map the finger position to an option 1:1 instead of a fixed pixel step.
+    private var activeOptions: List<String> = emptyList()
+    private var popupWidthPx = 0
+
+    // Anchor (screen key-center X) and direction of the long-press layout, used by
+    // hoverIndexForScreenX and by PopupView to mirror the drawn option order.
+    private var hoverAnchorX = 0f
+    private var growRight = true
+
+    // Last popup on-screen position we requested (PopupWindow has no public x/y getters).
+    private var lastX = Int.MIN_VALUE
+    private var lastY = Int.MIN_VALUE
+
     private data class PopupPosition(val x: Int, val y: Int, val width: Int, val height: Int)
 
+    private data class PopupLayout(
+        val x: Int,
+        val y: Int,
+        val width: Int,
+        val height: Int,
+        val anchorX: Float,
+        val growRight: Boolean
+    )
+
     private val locationBuf = IntArray(2)
+
+    /**
+     * Lays out the long-press popup relative to the key, growing TOWARD the screen
+     * center so the popup never collides with the screen edges:
+     *
+     *  - Keys on the left half (e.g. 'a'): the default option sits on the LEFT,
+     *    next to the key, and additional options extend rightward.
+     *  - Keys on the right half (e.g. 'o'): the default option sits on the RIGHT,
+     *    next to the key, and additional options extend leftward (mirrored order).
+     *
+     * The default option's slot is centered on [anchorX] (the key's screen center),
+     * so the finger is always over the currently-selected option.
+     */
+    private fun computeLongPressLayout(anchorView: View, keyRect: RectF?, optionCount: Int): PopupLayout {
+        val density = context.density
+        val width = if (optionCount <= 1) (66 * density).toInt() else (44 * optionCount * density).toInt()
+        val height = (72 * density).toInt()
+
+        anchorView.getLocationInWindow(locationBuf)
+        val anchorX = if (keyRect != null) {
+            locationBuf[0] + keyRect.centerX()
+        } else {
+            locationBuf[0] + anchorView.width / 2f
+        }
+
+        val screenWidth = context.resources.displayMetrics.widthPixels
+        val screenHeight = context.resources.displayMetrics.heightPixels
+        val margin = (8 * density).toInt()
+
+        val growRight = anchorX < screenWidth / 2f
+        val slot = width.toFloat() / optionCount.coerceAtLeast(1)
+
+        // Center the default option's slot on the key. For growRight the whole
+        // popup starts there and extends right; for growLeft it extends left.
+        val anchoredLeft = if (growRight) {
+            anchorX - slot / 2f
+        } else {
+            anchorX + slot / 2f - width
+        }
+        val left = anchoredLeft.coerceIn(
+            margin.toFloat(),
+            maxOf(margin.toFloat(), (screenWidth - margin - width).toFloat())
+        )
+
+        val x = left.toInt()
+        val yRaw = if (keyRect != null) {
+            locationBuf[1] + keyRect.top - height - 4f * density
+        } else {
+            locationBuf[1] - (70 * density)
+        }
+        val y = yRaw.toInt().coerceIn(margin, maxOf(margin, screenHeight - margin - height))
+
+        return PopupLayout(x, y, width, height, anchorX, growRight)
+    }
 
     private fun computePosition(anchorView: View, keyRect: RectF?, widthDp: Int): PopupPosition {
         val density = context.density
@@ -51,16 +128,18 @@ class KeyPopupWindow(private val context: Context) {
         }
         val idealLeft = keyCenterX - width / 2f
         val screenWidth = context.resources.displayMetrics.widthPixels
+        val screenHeight = context.resources.displayMetrics.heightPixels
         val margin = (8 * density).toInt()
 
-        val left = idealLeft.coerceIn(margin.toFloat(), (screenWidth - margin - width).toFloat())
+        val left = idealLeft.coerceIn(margin.toFloat(), maxOf(margin.toFloat(), (screenWidth - margin - width).toFloat()))
 
         val x = left.toInt()
-        val y = if (keyRect != null) {
-            (locationBuf[1] + keyRect.top - height - 4f * density).toInt()
+        val yRaw = if (keyRect != null) {
+            locationBuf[1] + keyRect.top - height - 4f * density
         } else {
-            locationBuf[1] - (70 * density).toInt()
+            locationBuf[1] - (70 * density)
         }
+        val y = yRaw.toInt().coerceIn(margin, maxOf(margin, screenHeight - margin - height))
 
         return PopupPosition(x, y, width, height)
     }
@@ -73,15 +152,28 @@ class KeyPopupWindow(private val context: Context) {
         keyRect: RectF? = null
     ) {
         currentMode = Mode.PREVIEW
+        activeOptions = emptyList()
         popupView.setPreviewData(label, isDark, theme)
 
         val (x, y, width, height) = computePosition(anchorView, keyRect, 66)
 
+        val wasShowing = popupWindow.isShowing
+        val oldX = lastX
+        val oldY = lastY
+        val oldWidth = popupWindow.width
+        val oldHeight = popupWindow.height
+
         popupWindow.width = width
         popupWindow.height = height
+        lastX = x
+        lastY = y
 
-        if (popupWindow.isShowing) {
-            popupWindow.update(x, y, width, height)
+        if (wasShowing) {
+            // Only pay for the WindowManager.updateViewLayout round-trip (main thread,
+            // mid-touch) when the preview actually moved or resized.
+            if (oldX != x || oldY != y || oldWidth != width || oldHeight != height) {
+                popupWindow.update(x, y, width, height)
+            }
         } else {
             popupWindow.showAtLocation(anchorView.rootView, Gravity.NO_GRAVITY, x, y)
         }
@@ -96,19 +188,58 @@ class KeyPopupWindow(private val context: Context) {
         keyRect: RectF? = null
     ) {
         currentMode = Mode.LONG_PRESS
-        popupView.setLongPressData(options, hoveredIdx, isDark, theme)
+        activeOptions = options
+        val layout = computeLongPressLayout(anchorView, keyRect, options.size)
+        hoverAnchorX = layout.anchorX
+        growRight = layout.growRight
+        popupView.setLongPressData(options, hoveredIdx, isDark, theme, mirrored = !layout.growRight)
 
-        val (x, y, width, height) = computePosition(anchorView, keyRect,
-            if (options.size <= 1) 66 else 44 * options.size)
+        // Capture the current geometry BEFORE assigning, so the unchanged check below
+        // reflects the real window state rather than the values we are about to set.
+        val wasShowing = popupWindow.isShowing
+        val oldX = lastX
+        val oldY = lastY
+        val oldWidth = popupWindow.width
+        val oldHeight = popupWindow.height
 
-        popupWindow.width = width
-        popupWindow.height = height
+        popupWindow.width = layout.width
+        popupWindow.height = layout.height
+        lastX = layout.x
+        lastY = layout.y
+        popupWidthPx = layout.width
 
-        if (popupWindow.isShowing) {
-            popupWindow.update(x, y, width, height)
+        if (wasShowing) {
+            // Avoid a pointless WindowManager.updateViewLayout (binder round-trip on
+            // the main thread while the finger is down) when geometry is unchanged.
+            if (oldX != layout.x || oldY != layout.y || oldWidth != layout.width || oldHeight != layout.height) {
+                popupWindow.update(layout.x, layout.y, layout.width, layout.height)
+            }
         } else {
-            popupWindow.showAtLocation(anchorView.rootView, Gravity.NO_GRAVITY, x, y)
+            popupWindow.showAtLocation(anchorView.rootView, Gravity.NO_GRAVITY, layout.x, layout.y)
         }
+    }
+
+    /**
+     * Maps the finger's window X onto an option index using the popup's real slot
+     * width, anchored at the key's screen center. The highlight therefore tracks
+     * the finger 1:1 instead of jumping by a hard-coded pixel step, which feels
+     * janky.
+     *
+     * The direction depends on where the key sits: for keys on the left half
+     * (growRight) a rightward drag walks toward higher indices; for keys on the
+     * right half (growLeft) a leftward drag does, i.e. the order runs opposite.
+     */
+    fun hoverIndexForScreenX(screenX: Float, baseIdx: Int): Int {
+        if (currentMode != Mode.LONG_PRESS || activeOptions.size <= 1) {
+            if (activeOptions.isEmpty()) return 0
+            return baseIdx.coerceIn(0, activeOptions.size - 1)
+        }
+        val size = activeOptions.size
+        val slot = popupWidthPx.toFloat() / size
+        if (slot <= 0f) return baseIdx.coerceIn(0, size - 1)
+        val slotOffset = (screenX - hoverAnchorX) / slot
+        val steps = if (growRight) Math.round(slotOffset) else -Math.round(slotOffset)
+        return (baseIdx + steps).coerceIn(0, size - 1)
     }
 
     fun updateHoverIndex(index: Int) {
@@ -131,6 +262,7 @@ class KeyPopupWindow(private val context: Context) {
 
         private var options: List<String> = emptyList()
         private var hoveredIdx: Int = -1
+        private var mirrored: Boolean = false
 
         private val density get() = context.density
         private val boldTypeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
@@ -153,12 +285,19 @@ class KeyPopupWindow(private val context: Context) {
             invalidate()
         }
 
-        fun setLongPressData(options: List<String>, hoveredIdx: Int, isDark: Boolean, theme: KeyboardTheme) {
+        fun setLongPressData(
+            options: List<String>,
+            hoveredIdx: Int,
+            isDark: Boolean,
+            theme: KeyboardTheme,
+            mirrored: Boolean
+        ) {
             this.mode = Mode.LONG_PRESS
             this.options = options
             this.hoveredIdx = hoveredIdx
             this.isDark = isDark
             this.theme = theme
+            this.mirrored = mirrored
             invalidate()
         }
 
@@ -232,8 +371,12 @@ class KeyPopupWindow(private val context: Context) {
                 val itemBottom = mainRect.bottom - 3f * density
 
                 for (idx in options.indices) {
-                    val optChar = options[idx]
-                    val isHovered = (idx == hoveredIdx)
+                    // For keys on the right half the option order is mirrored so the
+                    // default option ends up on the right, next to the key, while the
+                    // rest extend leftward toward the screen center.
+                    val originalIdx = if (mirrored) (options.size - 1 - idx) else idx
+                    val optChar = options[originalIdx]
+                    val isHovered = (originalIdx == hoveredIdx)
 
                     val itemLeft = mainRect.left + idx * optionWidth
                     val itemRight = itemLeft + optionWidth
