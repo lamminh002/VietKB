@@ -340,7 +340,7 @@ class HomeScreenView(private val activity: MainActivity) : ScreenView {
             onSurfaceVariantColor,
             engineCfg.macroEnabled,
             { enabled ->
-                AppPreferences.setEngineConfig(engineCfg.copy(macroEnabled = enabled, alwaysMacro = enabled))
+                AppPreferences.setEngineConfig(engineCfg.copy(macroEnabled = enabled))
             },
             16f * density,
             0f,

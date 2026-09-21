@@ -156,6 +156,10 @@ class SymbolsPickerGridView @JvmOverloads constructor(
                 currentX + actualWidth,
                 topOfBottomRow + bottomRowHeight
             )
+            // Bottom keys draw from visualRect like every other Key-based
+            // panel (pixel-identical: visualRect == rect here).
+            key.visualRect.set(key.rect)
+            key.applyShadow(density)
             currentX += actualWidth + horizontalSpacing
         }
     }
@@ -282,9 +286,16 @@ class SymbolsPickerGridView @JvmOverloads constructor(
             canvas.drawCircle(dotX, indicatorCenterY, if (isSelected) 3f * density else 2f * density, paint)
         }
 
-        // 3. Draw Bottom Control Keys
+        // 3. Draw Bottom Control Keys (same frame as every Key-based panel)
         bottomKeys.forEach { key ->
-            drawKeyBackground(canvas, key.rect, key.isPressed, key.isFunctional, key.isSpecialEnter)
+            computeScaledRect(
+                cx = key.visualRect.centerX(),
+                cy = key.visualRect.centerY(),
+                w = key.visualRect.width(),
+                h = key.visualRect.height(),
+                scale = if (key.isPressed) 0.96f else 1.0f
+            )
+            drawKeyBackgroundScaled(canvas, key)
 
             textPaint.color = textColor
             val isSingleChar = key.label.length == 1
@@ -370,12 +381,6 @@ class SymbolsPickerGridView @JvmOverloads constructor(
                         pressedSymbolIndex = newPressedIndex
                         invalidate()
                     }
-                } else {
-                    val deltaX = Math.abs(x - startX)
-                    val deltaY = Math.abs(y - startY)
-                    if (deltaX > 15f * density || deltaY > 15f * density) {
-                        // Prevent random trigger if sliding fingers
-                    }
                 }
             }
 
@@ -409,10 +414,8 @@ class SymbolsPickerGridView @JvmOverloads constructor(
                     
                     if (Math.abs(deltaX) > 40f * density && Math.abs(deltaX) > Math.abs(deltaY)) {
                         if (deltaX > 0) {
-                            onSwipeRight?.invoke()
                             onTabChange?.invoke((activeTab - 1).coerceAtLeast(0))
                         } else {
-                            onSwipeLeft?.invoke()
                             onTabChange?.invoke((activeTab + 1).coerceAtMost(8))
                         }
                     } else if (Math.abs(deltaX) < 10f * density && Math.abs(deltaY) < 10f * density) {
@@ -433,17 +436,7 @@ class SymbolsPickerGridView @JvmOverloads constructor(
         return true
     }
 
-    private fun findBottomKeyByCoordinates(x: Float, y: Float): Key? {
-        bottomKeys.forEach { key ->
-            if (key.rect.contains(x, y)) {
-                return key
-            }
-        }
-        return null
-    }
-
-    var onSwipeLeft: (() -> Unit)? = null
-    var onSwipeRight: (() -> Unit)? = null
+    private fun findBottomKeyByCoordinates(x: Float, y: Float): Key? = findKeyAt(bottomKeys, x, y)
 
     override fun onDetachedFromWindow() {
         super.onDetachedFromWindow()

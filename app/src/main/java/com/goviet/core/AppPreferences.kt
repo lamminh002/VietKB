@@ -6,9 +6,7 @@ import com.goviet.keyboard.util.StringListSerializer
 
 data class EngineConfig(
     val macroEnabled: Boolean = false,
-    val alwaysMacro: Boolean = false,
     val autoCapitalize: Boolean = false,
-    val useSyllableEngine: Boolean = true,
     val directW: Boolean = false,
     val oldTonePlacement: Boolean = false
 )
@@ -237,17 +235,13 @@ object AppPreferences {
 
     fun getEngineConfig(): EngineConfig {
         val macroEnabled = settingsPrefs.getBoolean("macro_enabled", true)
-        val alwaysMacro = settingsPrefs.getBoolean("always_macro", true)
         val autoCapitalize = settingsPrefs.getBoolean("auto_capitalize", false)
-        val useSyllableEngine = settingsPrefs.getBoolean("use_syllable_engine", true)
         val directW = settingsPrefs.getBoolean("direct_w", false)
         val oldTonePlacement = settingsPrefs.getBoolean("old_tone_placement", false)
 
         return EngineConfig(
             macroEnabled = macroEnabled,
-            alwaysMacro = alwaysMacro,
             autoCapitalize = autoCapitalize,
-            useSyllableEngine = useSyllableEngine,
             directW = directW,
             oldTonePlacement = oldTonePlacement
         )
@@ -256,9 +250,7 @@ object AppPreferences {
     fun setEngineConfig(config: EngineConfig) {
         settingsPrefs.edit().apply {
             putBoolean("macro_enabled", config.macroEnabled)
-            putBoolean("always_macro", config.alwaysMacro)
             putBoolean("auto_capitalize", config.autoCapitalize)
-            putBoolean("use_syllable_engine", config.useSyllableEngine)
             putBoolean("direct_w", config.directW)
             putBoolean("old_tone_placement", config.oldTonePlacement)
             apply()

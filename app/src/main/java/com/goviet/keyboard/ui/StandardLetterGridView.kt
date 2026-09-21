@@ -80,10 +80,6 @@ class StandardLetterGridView @JvmOverloads constructor(
 
     var onKey: ((String) -> Unit)? = null
     var onSwitchToSymbols: (() -> Unit)? = null
-    var onSwitchToEmoji: (() -> Unit)? = null
-    var onOpenSettings: (() -> Unit)? = null
-    var onToggleLanguage: (() -> Unit)? = null
-    var onOpenPopup: ((List<String>) -> Unit)? = null
 
     private var internalKeyboardMode: String = "ABC"
 
@@ -101,9 +97,7 @@ class StandardLetterGridView @JvmOverloads constructor(
         invalidate = { invalidate() },
         density = density,
         isDark = { isDark },
-        currentTheme = { currentTheme },
-        parentWidth = { width },
-        parentHeight = { height }
+        currentTheme = { currentTheme }
     )
 
     // Pre-allocated CharArrays for space key — zero-GC on onDraw
@@ -200,10 +194,7 @@ class StandardLetterGridView @JvmOverloads constructor(
                     for (key in leftKeys) {
                         val actualWidth = key.weight * standardKeyWidth
                         key.visualRect.set(currentX, topOfRow, currentX + actualWidth, bottomOfRow)
-                        key.shadowRect.set(
-                            key.visualRect.left, key.visualRect.top + 0.8f * density,
-                            key.visualRect.right, key.visualRect.bottom + 1.2f * density
-                        )
+                        key.applyShadow(density)
                         currentX += actualWidth + horizontalSpacing
                     }
 
@@ -214,10 +205,7 @@ class StandardLetterGridView @JvmOverloads constructor(
                     for (key in rightKeys) {
                         val actualWidth = key.weight * standardKeyWidth
                         key.visualRect.set(currentX, topOfRow, currentX + actualWidth, bottomOfRow)
-                        key.shadowRect.set(
-                            key.visualRect.left, key.visualRect.top + 0.8f * density,
-                            key.visualRect.right, key.visualRect.bottom + 1.2f * density
-                        )
+                        key.applyShadow(density)
                         currentX += actualWidth + horizontalSpacing
                     }
                 }
@@ -309,10 +297,7 @@ class StandardLetterGridView @JvmOverloads constructor(
                 var currentX = paddingLeft + r2SideMargin
                 for (key in row) {
                     key.visualRect.set(currentX, topOfRow, currentX + r2UnitWidth, bottomOfRow)
-                    key.shadowRect.set(
-                        key.visualRect.left, key.visualRect.top + 0.8f * density,
-                        key.visualRect.right, key.visualRect.bottom + 1.2f * density
-                    )
+                    key.applyShadow(density)
                     currentX += r2UnitWidth + horizontalSpacing
                 }
             } else {
@@ -325,10 +310,7 @@ class StandardLetterGridView @JvmOverloads constructor(
                 for (key in row) {
                     val actualWidth = key.weight * unitWidth
                     key.visualRect.set(currentX, topOfRow, currentX + actualWidth, bottomOfRow)
-                    key.shadowRect.set(
-                        key.visualRect.left, key.visualRect.top + 0.8f * density,
-                        key.visualRect.right, key.visualRect.bottom + 1.2f * density
-                    )
+                    key.applyShadow(density)
                     currentX += actualWidth + horizontalSpacing
                 }
             }
@@ -382,10 +364,7 @@ class StandardLetterGridView @JvmOverloads constructor(
         for (key in clusterKeys) {
             val actualWidth = key.weight * unitWidth
             key.visualRect.set(currentX, topY, currentX + actualWidth, bottomY)
-            key.shadowRect.set(
-                key.visualRect.left, key.visualRect.top + 0.8f * density,
-                key.visualRect.right, key.visualRect.bottom + 1.2f * density
-            )
+            key.applyShadow(density)
             currentX += actualWidth + horizontalSpacing
         }
     }

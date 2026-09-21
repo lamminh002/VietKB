@@ -48,9 +48,6 @@ class KeyboardRootView @JvmOverloads constructor(
 
     var activeSymbolsTab: Int = 1
     var activeEmojiTab: Int = 0
-    var showInputMethodMenu: Boolean = false
-    var activePopupKeyOptions: List<String>? = null
-    var showClipboardClearConfirmDialog: Boolean = false
     var isToolbarOpen: Boolean = true
 
     // Layout views
@@ -142,7 +139,6 @@ class KeyboardRootView @JvmOverloads constructor(
             service.inputEngine.savePreferences(
                 context = context,
                 macro = macro,
-                alwaysMac = macro,
                 autoCap = autoCap,
                 dirW = dirW,
                 oldTone = oldTone
@@ -424,7 +420,6 @@ class KeyboardRootView @JvmOverloads constructor(
                     traditionalSettingsView.activeSubMenu = TraditionalSettingsView.SubMenu.NONE
                 }
                 traditionalSettingsView.macroEnabled = service.inputEngine.macroEnabled
-                traditionalSettingsView.alwaysMacro = service.inputEngine.macroEnabled
                 traditionalSettingsView.autoCapitalize = service.inputEngine.autoCapitalize
                 traditionalSettingsView.directW = service.inputEngine.directW
                 traditionalSettingsView.oldTonePlacement = service.inputEngine.oldTonePlacement
@@ -496,17 +491,6 @@ class KeyboardRootView @JvmOverloads constructor(
                     }
                 }
                 standardLetterGrid.onSwitchToSymbols = {}
-                standardLetterGrid.onSwitchToEmoji = {
-                    service._keyboardMode.value = "EMOJI"
-                }
-                standardLetterGrid.onOpenSettings = {
-                    service._keyboardMode.value = "SETTINGS"
-                }
-                standardLetterGrid.onToggleLanguage = {
-                    service._languageMode.value = if (languageMode == "VIE") "ENG" else "VIE"
-                    service.inputProcessor.clearState()
-                    service.currentInputConnection?.finishComposingText()
-                }
             }
             "SYMBOL_PICKER" -> {
                 symbolsPickerGrid.service = service
@@ -552,21 +536,6 @@ class KeyboardRootView @JvmOverloads constructor(
                 }
                 standardLetterGrid.onSwitchToSymbols = {
                     service._keyboardMode.value = "SYMBOLS"
-                }
-                standardLetterGrid.onSwitchToEmoji = {
-                    service._keyboardMode.value = "EMOJI"
-                }
-                standardLetterGrid.onOpenSettings = {
-                    service._keyboardMode.value = "SETTINGS"
-                }
-                standardLetterGrid.onToggleLanguage = {
-                    service._languageMode.value = if (languageMode == "VIE") "ENG" else "VIE"
-                    service.inputProcessor.clearState()
-                    service.currentInputConnection?.finishComposingText()
-                }
-                standardLetterGrid.onOpenPopup = { options ->
-                    activePopupKeyOptions = options
-                    render()
                 }
                 standardLetterGrid.updateTheme(theme)
             }
@@ -854,6 +823,17 @@ class UnifiedTopHeaderView(context: Context, private val rootView: KeyboardRootV
         strokeJoin = Paint.Join.ROUND
     }
 
+    // Caches to avoid per-frame allocations in onDraw (lists are constant,
+    // tmpRect is set-then-drawn sequentially, typefaces are process-cached).
+    private val tmpRect = RectF()
+    private val headerBold = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
+    private val headerNormal = Typeface.create(Typeface.DEFAULT, Typeface.NORMAL)
+
+    private companion object {
+        val SYMBOL_TAB_LABELS = listOf("recent", "1?#", "()", "⇄", "±", "①", "◇", "₫", "©")
+        val EMOJI_TAB_ICONS = listOf("recent", "smileys", "gestures", "animals", "food", "places", "activities", "objects", "symbols", "flags")
+    }
+
     private data class ShortcutSpec(
         val id: String,
         val isActive: Boolean
@@ -970,13 +950,13 @@ class UnifiedTopHeaderView(context: Context, private val rootView: KeyboardRootV
                 if (isPressed) {
                     paint.color = (textColor and 0x00FFFFFF) or (0x14 shl 24)
                     paint.style = Paint.Style.FILL
-                    val rect = RectF(4f * density, 4f * density, 40f * density, h - 4f * density)
-                    canvas.drawRoundRect(rect, 8f * density, 8f * density, paint)
+                    tmpRect.set(4f * density, 4f * density, 40f * density, h - 4f * density)
+                    canvas.drawRoundRect(tmpRect, 8f * density, 8f * density, paint)
                 }
                 IconDrawer.draw(canvas, context, "arrow_back", cx + 0.5f * density, cy, 18f * density, textColor)
 
                 // Tabs area
-                val labels = listOf("recent", "1?#", "()", "⇄", "±", "①", "◇", "₫", "©")
+                val labels = SYMBOL_TAB_LABELS
                 val tabWidth = (56 * density).toInt()
                 val inactiveColor = Color.argb(178, Color.red(textColor), Color.green(textColor), Color.blue(textColor))
 
@@ -995,8 +975,8 @@ class UnifiedTopHeaderView(context: Context, private val rootView: KeyboardRootV
                     if (pressedButtonId == "symbol_tab_$i") {
                         paint.color = (textColor and 0x00FFFFFF) or (0x14 shl 24)
                         paint.style = Paint.Style.FILL
-                        val rect = RectF(tabLeft + 2f * density, 4f * density, tabRight - 2f * density, h - 4f * density)
-                        canvas.drawRoundRect(rect, 6f * density, 6f * density, paint)
+                        tmpRect.set(tabLeft + 2f * density, 4f * density, tabRight - 2f * density, h - 4f * density)
+                        canvas.drawRoundRect(tmpRect, 6f * density, 6f * density, paint)
                     }
 
                     if (isActive) {
@@ -1004,8 +984,8 @@ class UnifiedTopHeaderView(context: Context, private val rootView: KeyboardRootV
                         paint.style = Paint.Style.FILL
                         val barW = 18f * density
                         val barH = 2f * density
-                        val rect = RectF(tabCx - barW / 2f, h - barH - 2f * density, tabCx + barW / 2f, h - 2f * density)
-                        canvas.drawRoundRect(rect, 1f * density, 1f * density, paint)
+                        tmpRect.set(tabCx - barW / 2f, h - barH - 2f * density, tabCx + barW / 2f, h - 2f * density)
+                        canvas.drawRoundRect(tmpRect, 1f * density, 1f * density, paint)
                     }
 
                     if (label == "recent") {
@@ -1018,7 +998,7 @@ class UnifiedTopHeaderView(context: Context, private val rootView: KeyboardRootV
                     } else {
                         textPaint.color = if (isActive) accentColor else inactiveColor
                         textPaint.textSize = if (label == "1?#") 11f * density else 14f * density
-                        textPaint.typeface = if (isActive) Typeface.create(Typeface.DEFAULT, Typeface.BOLD) else Typeface.create(Typeface.DEFAULT, Typeface.NORMAL)
+                        textPaint.typeface = if (isActive) headerBold else headerNormal
                         val baseline = KeyboardUtils.centerBaselineY(tabCy, textPaint)
                         canvas.drawText(label, tabCx, baseline, textPaint)
                     }
@@ -1033,13 +1013,13 @@ class UnifiedTopHeaderView(context: Context, private val rootView: KeyboardRootV
                 if (isPressed) {
                     paint.color = (textColor and 0x00FFFFFF) or (0x14 shl 24)
                     paint.style = Paint.Style.FILL
-                    val rect = RectF(4f * density, 4f * density, 40f * density, h - 4f * density)
-                    canvas.drawRoundRect(rect, 8f * density, 8f * density, paint)
+                    tmpRect.set(4f * density, 4f * density, 40f * density, h - 4f * density)
+                    canvas.drawRoundRect(tmpRect, 8f * density, 8f * density, paint)
                 }
                 IconDrawer.draw(canvas, context, "arrow_back", cx + 0.5f * density, cy, 18f * density, textColor)
 
                 // Tabs area
-                val icons = listOf("recent", "smileys", "gestures", "animals", "food", "places", "activities", "objects", "symbols", "flags")
+                val icons = EMOJI_TAB_ICONS
                 val tabWidth = (56 * density).toInt()
                 val inactiveColor = Color.argb(178, Color.red(textColor), Color.green(textColor), Color.blue(textColor))
 
@@ -1058,8 +1038,8 @@ class UnifiedTopHeaderView(context: Context, private val rootView: KeyboardRootV
                     if (pressedButtonId == "emoji_tab_$i") {
                         paint.color = (textColor and 0x00FFFFFF) or (0x14 shl 24)
                         paint.style = Paint.Style.FILL
-                        val rect = RectF(tabLeft + 2f * density, 4f * density, tabRight - 2f * density, h - 4f * density)
-                        canvas.drawRoundRect(rect, 6f * density, 6f * density, paint)
+                        tmpRect.set(tabLeft + 2f * density, 4f * density, tabRight - 2f * density, h - 4f * density)
+                        canvas.drawRoundRect(tmpRect, 6f * density, 6f * density, paint)
                     }
 
                     if (isActive) {
@@ -1067,8 +1047,8 @@ class UnifiedTopHeaderView(context: Context, private val rootView: KeyboardRootV
                         paint.style = Paint.Style.FILL
                         val barW = 18f * density
                         val barH = 2f * density
-                        val rect = RectF(tabCx - barW / 2f, h - barH - 2f * density, tabCx + barW / 2f, h - 2f * density)
-                        canvas.drawRoundRect(rect, 1f * density, 1f * density, paint)
+                        tmpRect.set(tabCx - barW / 2f, h - barH - 2f * density, tabCx + barW / 2f, h - 2f * density)
+                        canvas.drawRoundRect(tmpRect, 1f * density, 1f * density, paint)
                     }
 
                     val baseColor = if (isActive) accentColor else inactiveColor
@@ -1089,8 +1069,8 @@ class UnifiedTopHeaderView(context: Context, private val rootView: KeyboardRootV
                 if (pressedButtonId == "toggle") {
                     paint.color = (textColor and 0x00FFFFFF) or (0x14 shl 24)
                     paint.style = Paint.Style.FILL
-                    val rect = RectF(4f * density, 4f * density, 40f * density, h - 4f * density)
-                    canvas.drawRoundRect(rect, 8f * density, 8f * density, paint)
+                    tmpRect.set(4f * density, 4f * density, 40f * density, h - 4f * density)
+                    canvas.drawRoundRect(tmpRect, 8f * density, 8f * density, paint)
                 }
 
                 if (isBackMode) {
@@ -1124,8 +1104,8 @@ class UnifiedTopHeaderView(context: Context, private val rootView: KeyboardRootV
                 if (pressedButtonId == "hide") {
                     paint.color = (textColor and 0x00FFFFFF) or (0x14 shl 24)
                     paint.style = Paint.Style.FILL
-                    val rect = RectF(hideLeft + 4f * density, 4f * density, w - 4f * density, h - 4f * density)
-                    canvas.drawRoundRect(rect, 8f * density, 8f * density, paint)
+                    tmpRect.set(hideLeft + 4f * density, 4f * density, w - 4f * density, h - 4f * density)
+                    canvas.drawRoundRect(tmpRect, 8f * density, 8f * density, paint)
                 }
 
                 val hideScale = if (pressedButtonId == "hide") 0.92f else 1.0f
@@ -1153,8 +1133,9 @@ class UnifiedTopHeaderView(context: Context, private val rootView: KeyboardRootV
                     val top = midY - (midY - fullTop) * toolbarProgress
                     val bottom = midY + (fullBottom - midY) * toolbarProgress
 
+                    tmpRect.set(dividerLeft, top, dividerLeft + dividerW, bottom)
                     canvas.drawRoundRect(
-                        RectF(dividerLeft, top, dividerLeft + dividerW, bottom),
+                        tmpRect,
                         dividerW / 2f,
                         dividerW / 2f,
                         paint
@@ -1205,8 +1186,8 @@ class UnifiedTopHeaderView(context: Context, private val rootView: KeyboardRootV
                         if (pressedButtonId == spec.id) {
                             paint.color = (textColor and 0x00FFFFFF) or (0x14 shl 24)
                             paint.style = Paint.Style.FILL
-                            val rect = RectF(specLeft + 2f * density, 4f * density, specRight - 2f * density, h - 4f * density)
-                            canvas.drawRoundRect(rect, 6f * density, 6f * density, paint)
+                            tmpRect.set(specLeft + 2f * density, 4f * density, specRight - 2f * density, h - 4f * density)
+                            canvas.drawRoundRect(tmpRect, 6f * density, 6f * density, paint)
                         }
 
                         val baseColor = if (spec.isActive) activeColor else inactiveColor

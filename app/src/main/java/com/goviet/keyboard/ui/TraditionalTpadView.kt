@@ -57,9 +57,8 @@ class TraditionalTpadView @JvmOverloads constructor(
     // Reusable buffer for converting view-local coordinates to window coordinates.
     private val locationBuf = IntArray(2)
 
-    // For BACKSPACE repeating and sliding deletion
-    private var backspaceSelectCount = 0
-    private var backspaceStartX = 0f
+    // BACKSPACE repeating + sliding deletion (shared math, see BackspaceSwipeTracker)
+    private val backspaceSwipe = BackspaceSwipeTracker()
     private val backspaceRepeatHandler = RepeatingKeyPressHandler(
         intervalProvider = { count: Int ->
             when {
@@ -128,7 +127,7 @@ class TraditionalTpadView @JvmOverloads constructor(
 
             key.rect.set(cellLeft, cellTop, cellRight, cellBottom)
             key.visualRect.set(keyLeft, keyTop, keyRight, keyBottom)
-            key.shadowRect.set(keyLeft, keyTop + 0.8f * density, keyRight, keyBottom + 1.2f * density)
+            key.applyShadow(density)
         }
     }
 
@@ -213,14 +212,7 @@ class TraditionalTpadView @JvmOverloads constructor(
     }
 
 
-    private fun findKeyByCoordinates(x: Float, y: Float): Key? {
-        for (key in keysList) {
-            if (key.rect.contains(x, y)) {
-                return key
-            }
-        }
-        return null
-    }
+    private fun findKeyByCoordinates(x: Float, y: Float): Key? = findKeyAt(keysList, x, y)
 
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
@@ -259,12 +251,11 @@ class TraditionalTpadView @JvmOverloads constructor(
                     key.isPressed = true
                     isLongPressed = false
                     if (key.code == "BACKSPACE") {
-                        backspaceSelectCount = 0
-                        backspaceStartX = x
+                        backspaceSwipe.reset(x)
                         onKey?.invoke("BACKSPACE")
                         backspaceRepeatHandler.start()
                     } else {
-                        longPressHandler.postDelayed(longPressRunnable, 350)
+                        longPressHandler.postDelayed(longPressRunnable, RepeatingKeyPressHandler.DEFAULT_INITIAL_DELAY_MS)
                     }
                     invalidate()
                 }
@@ -278,11 +269,9 @@ class TraditionalTpadView @JvmOverloads constructor(
                         if (options != null && options.isNotEmpty()) {
                             getLocationInWindow(locationBuf)
                             val screenX = locationBuf[0] + x
-                            val hoveredIdx = keyPopup.hoverIndexForScreenX(screenX, trackedKey.longPressDefaultIndex)
-                            if (hoveredIdx != activePopupOptionIndex) {
-                                activePopupOptionIndex = hoveredIdx
-                                keyPopup.updateHoverIndex(hoveredIdx)
-                            }
+                            activePopupOptionIndex = keyPopup.trackHoverForScreenX(
+                                screenX, trackedKey.longPressDefaultIndex, activePopupOptionIndex
+                            )
                         }
                     } else {
                         val currentHovered = findKeyByCoordinates(x, y)
@@ -296,31 +285,22 @@ class TraditionalTpadView @JvmOverloads constructor(
                                 currentHovered.isPressed = true
                                 
                                 if (currentHovered.code == "BACKSPACE") {
-                                    backspaceSelectCount = 0
-                                    backspaceStartX = x
+                                    backspaceSwipe.reset(x)
                                     onKey?.invoke("BACKSPACE")
                                     backspaceRepeatHandler.start()
                                 } else {
-                                    longPressHandler.postDelayed(longPressRunnable, 350)
+                                    longPressHandler.postDelayed(longPressRunnable, RepeatingKeyPressHandler.DEFAULT_INITIAL_DELAY_MS)
                                 }
                             } else {
                                 activeTouchedKey = null
                             }
                             invalidate()
                         } else if (trackedKey.code == "BACKSPACE" && !isLongPressed) {
-                            val deltaX = x - backspaceStartX
-                            if (Math.abs(deltaX) > 10f * density) {
+                            if (backspaceSwipe.shouldStopRepeat(x, density)) {
                                 backspaceRepeatHandler.stop()
                             }
-                            if (deltaX < -30f * density) {
-                                val wordsToDelete = (-deltaX / (30f * density)).toInt()
-                                if (wordsToDelete > backspaceSelectCount) {
-                                    val diff = wordsToDelete - backspaceSelectCount
-                                    backspaceSelectCount = wordsToDelete
-                                    repeat(diff) {
-                                        onKey?.invoke("DELETE_WORD")
-                                    }
-                                }
+                            repeat(backspaceSwipe.advanceWords(x, density)) {
+                                onKey?.invoke("DELETE_WORD")
                             }
                         }
                     }

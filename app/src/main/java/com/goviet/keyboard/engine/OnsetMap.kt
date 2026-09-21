@@ -134,9 +134,30 @@ object OnsetMap {
         val idx = (code ushr 3) and 0x1F
         if (p >= onset.length || idx >= ONSET_AT.size) return onset
         val buf = onset.toCharArray()
+        applyFoldInto(buf, p, idx)
+        return String(buf)
+    }
+
+    /**
+     * CharSequence overload — identical fold, no input snapshot allocation.
+     * Hot-path callers pass [OwnedBuffer] straight in.
+     */
+    @JvmStatic
+    fun applyFold(onset: CharSequence, code: Int): String {
+        if (code == 0) return onset.toString()
+        val p = code and 7
+        val idx = (code ushr 3) and 0x1F
+        if (p >= onset.length || idx >= ONSET_AT.size) return onset.toString()
+        val buf = CharArray(onset.length)
+        for (i in buf.indices) buf[i] = onset[i]
+        applyFoldInto(buf, p, idx)
+        return String(buf)
+    }
+
+    /** Shared in-place replacement once the working copy exists. */
+    private fun applyFoldInto(buf: CharArray, p: Int, idx: Int) {
         val ch = ONSET_AT[idx]
         buf[p] = if (buf[p].isUpperCase()) ch.uppercaseChar() else ch
-        return String(buf)
     }
 
     /**
@@ -157,9 +178,27 @@ object OnsetMap {
     fun unfoldOnset(onset: String, foldKey: Char): String {
         if (onset.isEmpty()) return onset
         val buf = onset.toCharArray()
+        unfoldInto(buf, foldKey)
+        return String(buf)
+    }
+
+    /**
+     * CharSequence overload — identical unfold, no input snapshot allocation.
+     * Hot-path callers pass [OwnedBuffer] straight in.
+     */
+    @JvmStatic
+    fun unfoldOnset(onset: CharSequence, foldKey: Char): String {
+        if (onset.isEmpty()) return onset.toString()
+        val buf = CharArray(onset.length)
+        for (i in buf.indices) buf[i] = onset[i]
+        unfoldInto(buf, foldKey)
+        return String(buf)
+    }
+
+    /** Shared in-place restore once the working copy exists. */
+    private fun unfoldInto(buf: CharArray, foldKey: Char) {
         val ch = foldKey.lowercaseChar()
         buf[0] = if (buf[0].isUpperCase()) ch.uppercaseChar() else ch
-        return String(buf)
     }
 
     /** Complete valid onset (not just a prefix). */

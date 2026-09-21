@@ -335,14 +335,7 @@ class TraditionalEditPadView @JvmOverloads constructor(
         keyRepeatHandler.stop()
     }
 
-    private fun findKeyByCoordinates(x: Float, y: Float): Key? {
-        allKeys.forEach { key ->
-            if (key.rect.contains(x, y)) {
-                return key
-            }
-        }
-        return null
-    }
+    private fun findKeyByCoordinates(x: Float, y: Float): Key? = findKeyAt(allKeys, x, y)
 
     private val padding get() = 4f * density
 }

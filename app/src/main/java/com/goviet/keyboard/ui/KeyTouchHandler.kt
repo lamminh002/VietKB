@@ -26,9 +26,7 @@ class KeyTouchHandler(
     private val invalidate: () -> Unit,
     private val density: Float,
     private val isDark: () -> Boolean,
-    private val currentTheme: () -> KeyboardTheme,
-    private val parentWidth: () -> Int,
-    private val parentHeight: () -> Int
+    private val currentTheme: () -> KeyboardTheme
 ) {
     private val activePointerKeys = mutableMapOf<Int, Key>()
     private val trackedKeySet = mutableSetOf<Key>()
@@ -50,9 +48,8 @@ class KeyTouchHandler(
     private var cursorLastTriggerX = 0f
     private var isCursorSwipeActive = false
 
-    // Backspace swipe
-    private var backspaceStartX = 0f
-    private var backspaceSelectCount = 0
+    // Backspace swipe (shared swipe-to-delete-words math, see BackspaceSwipeTracker)
+    private val backspaceSwipe = BackspaceSwipeTracker()
     private var isBackspaceSwipeActive = false
     private var hasBackspaceTriggered = false
     private val backspaceRepeatHandler = RepeatingKeyPressHandler {
@@ -63,10 +60,14 @@ class KeyTouchHandler(
     // Long press
     private val longPressHandler = Handler(Looper.getMainLooper())
     private var activePopupOptionIndex = -1
+    // Guards the long-press option commit so a two-finger gesture
+    // (POINTER_UP then ACTION_UP) cannot commit the option twice.
+    private var longPressOptionConsumed = false
     private val longPressRunnable = Runnable {
         val key = activeTouchedKey ?: return@Runnable
         val opts = key.longPressOptions; if (opts != null && opts.isNotEmpty()) {
             isLongPressed = true
+            longPressOptionConsumed = false
             keyPopup.dismiss()
             activePopupOptionIndex = key.longPressDefaultIndex
             keyPopup.showLongPress(
@@ -111,6 +112,7 @@ class KeyTouchHandler(
                         startX = px
                         startY = py
                         isLongPressed = false
+                        longPressOptionConsumed = false
                         isCursorSwipeActive = false
                         isBackspaceSwipeActive = false
                         backspaceRepeatHandler.stop()
@@ -122,8 +124,7 @@ class KeyTouchHandler(
                         }
 
                         if (key.code == "BACKSPACE") {
-                            backspaceStartX = px
-                            backspaceSelectCount = 0
+                            backspaceSwipe.reset(px)
                             isBackspaceSwipeActive = true
                             hasBackspaceTriggered = false
                             backspaceRepeatHandler.start()
@@ -133,7 +134,7 @@ class KeyTouchHandler(
                             keyPopup.showPreview(parentView!!, key.label, isDark(), currentTheme(), key.rect)
                         }
 
-                        longPressHandler.postDelayed(longPressRunnable, 350)
+                        longPressHandler.postDelayed(longPressRunnable, RepeatingKeyPressHandler.DEFAULT_INITIAL_DELAY_MS)
                     }
 
                     invalidate()
@@ -157,11 +158,9 @@ class KeyTouchHandler(
                                 if (options != null && options.isNotEmpty()) {
                                     parentView?.getLocationInWindow(locationBuf)
                                     val screenX = locationBuf[0] + px
-                                    val hoveredIdx = keyPopup.hoverIndexForScreenX(screenX, trackedKey.longPressDefaultIndex)
-                                    if (hoveredIdx != activePopupOptionIndex) {
-                                        activePopupOptionIndex = hoveredIdx
-                                        keyPopup.updateHoverIndex(hoveredIdx)
-                                    }
+                                    activePopupOptionIndex = keyPopup.trackHoverForScreenX(
+                                        screenX, trackedKey.longPressDefaultIndex, activePopupOptionIndex
+                                    )
                                 }
                             } else {
                                 val movedBeyondSlop = deltaX > longPressSlop || deltaY > longPressSlop
@@ -177,7 +176,7 @@ class KeyTouchHandler(
                                     longPressHandler.removeCallbacks(longPressRunnable)
                                     val hoveredOpts = currentHovered.longPressOptions
                                     if (hoveredOpts != null && hoveredOpts.isNotEmpty()) {
-                                        longPressHandler.postDelayed(longPressRunnable, 350)
+                                        longPressHandler.postDelayed(longPressRunnable, RepeatingKeyPressHandler.DEFAULT_INITIAL_DELAY_MS)
                                     }
 
                                     if (isPreviewableKey(currentHovered)) {
@@ -215,20 +214,11 @@ class KeyTouchHandler(
                                 }
 
                                 if (trackedKey.code == "BACKSPACE" && isBackspaceSwipeActive) {
-                                    val swipeDeltaX = px - backspaceStartX
-                                    if (Math.abs(swipeDeltaX) > 10f * density) {
+                                    if (backspaceSwipe.shouldStopRepeat(px, density)) {
                                         backspaceRepeatHandler.stop()
                                     }
-
-                                    if (swipeDeltaX < -30f * density) {
-                                        val wordsToDelete = (-swipeDeltaX / (30f * density)).toInt()
-                                        if (wordsToDelete > backspaceSelectCount) {
-                                            val diff = wordsToDelete - backspaceSelectCount
-                                            backspaceSelectCount = wordsToDelete
-                                            repeat(diff) {
-                                                onKey("DELETE_WORD")
-                                            }
-                                        }
+                                    repeat(backspaceSwipe.advanceWords(px, density)) {
+                                        onKey("DELETE_WORD")
                                     }
                                 }
                             }
@@ -276,7 +266,7 @@ class KeyTouchHandler(
 
                 if (isLongPressed) {
                     val key = activeTouchedKey ?: activePointerKeys[event.getPointerId(0)]
-                    if (key != null) {
+                    if (key != null && !longPressOptionConsumed) {
                         val lpOpts = key.longPressOptions
                         if (lpOpts != null && activePopupOptionIndex in lpOpts.indices) {
                             onKey(lpOpts[activePopupOptionIndex])
@@ -287,6 +277,7 @@ class KeyTouchHandler(
                                 onKey(lpOpts2[defaultIdx])
                             }
                         }
+                        longPressOptionConsumed = true
                     }
                     keyPopup.dismiss()
 
@@ -323,20 +314,21 @@ class KeyTouchHandler(
     }
 
     private fun handleKeyRelease(key: Key) {
-        if (isLongPressed && key == activeTouchedKey) {
+        if (isLongPressed && key == activeTouchedKey && !longPressOptionConsumed) {
             val lpOpts = key.longPressOptions
             if (lpOpts != null && activePopupOptionIndex in lpOpts.indices) {
                 onKey(lpOpts[activePopupOptionIndex])
+                longPressOptionConsumed = true
             }
         } else if (isCursorSwipeActive && key.code == "SPACE") {
             // Sliding cursor handled, skip normal release dispatch
-        } else if (key.code == "BACKSPACE" && backspaceSelectCount > 0) {
+        } else if (key.code == "BACKSPACE" && backspaceSwipe.selectCount > 0) {
             // Sliding backspace delete handled, skip normal release dispatch
         } else {
             when (key.code) {
                 "SHIFT" -> onKey("SHIFT")
                 "BACKSPACE" -> {
-                    if (!hasBackspaceTriggered && backspaceSelectCount == 0) {
+                    if (!hasBackspaceTriggered && backspaceSwipe.selectCount == 0) {
                         onKey("BACKSPACE")
                     }
                 }
@@ -358,6 +350,7 @@ class KeyTouchHandler(
         trackedKeySet.clear()
         activeTouchedKey = null
         isLongPressed = false
+        longPressOptionConsumed = false
         isCursorSwipeActive = false
         isBackspaceSwipeActive = false
         keyPopup.dismiss()
@@ -365,14 +358,7 @@ class KeyTouchHandler(
 
     private fun isPreviewableKey(key: Key): Boolean = key.code !in previewExcludedCodes
 
-    fun findKeyByCoordinates(x: Float, y: Float): Key? {
-        for (key in keys()) {
-            if (key.rect.contains(x, y)) {
-                return key
-            }
-        }
-        return null
-    }
+    fun findKeyByCoordinates(x: Float, y: Float): Key? = findKeyAt(keys(), x, y)
 
     fun cleanup() {
         backspaceRepeatHandler.stop()

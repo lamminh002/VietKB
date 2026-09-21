@@ -315,7 +315,7 @@ class BackspaceHandler(
                 ic.commitText(display, 1)
             }
         } else {
-            ic.setComposingText(display, 1)
+            controller.syncPreeditDirect(ic, display)
         }
         controller.lastSetComposingText = display
     }

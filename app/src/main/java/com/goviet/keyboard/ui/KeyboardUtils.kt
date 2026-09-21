@@ -24,6 +24,12 @@ object KeyboardUtils {
     private val path = Path()
     private val rectF = RectF()
 
+    // Secondary-label width cache: the label set is tiny and fixed per
+    // density, so measureText runs once per label instead of every frame.
+    // (Measured with the caller's paint *after* it sets 9dp, hence valid.)
+    private var secCacheDensity = 0f
+    private val secWidthCache = HashMap<String, Float>()
+
     fun calculateStandardRowHeight(
         totalHeight: Float,
         density: Float,
@@ -230,7 +236,11 @@ object KeyboardUtils {
         textPaint.textSize = 9f * density
         textPaint.color = textColor
         val secX = drawRect.right - 5f * density
-        val secWidth = textPaint.measureText(label)
+        if (secCacheDensity != density) {
+            secWidthCache.clear()
+            secCacheDensity = density
+        }
+        val secWidth = secWidthCache.getOrPut(label) { textPaint.measureText(label) }
         val secCenterX = secX - secWidth / 2f
         val secY = centerBaselineY(drawRect.top + 9f * density, textPaint)
         canvas.drawText(label, secCenterX, secY, textPaint)

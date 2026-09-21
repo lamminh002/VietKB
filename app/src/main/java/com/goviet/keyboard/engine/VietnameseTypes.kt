@@ -40,7 +40,6 @@ enum class Tone(val index: Int, val key: Char?) {
  */
 data class EngineOptions(
     var macroEnabled: Boolean = false,
-    var alwaysMacro: Boolean = false,
     var directW: Boolean = false,
     var oldTonePlacement: Boolean = false
 )

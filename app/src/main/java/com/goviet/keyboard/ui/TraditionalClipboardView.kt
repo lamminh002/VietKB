@@ -97,6 +97,12 @@ class TraditionalClipboardView @JvmOverloads constructor(
     private val commitRunnables = mutableMapOf<ClipboardEntity, Runnable>()
     private val undoHandler = Handler(Looper.getMainLooper())
 
+    // Draw caches: header titles are few and fixed, and the delete label is
+    // constant — uppercase()/measureText() run once instead of every frame.
+    private val upperTitleCache = HashMap<String, String>()
+    private var deleteLabelDensity = 0f
+    private var deleteLabelWidth = 0f
+
     init {
         calculateLayout()
     }
@@ -416,7 +422,7 @@ class TraditionalClipboardView @JvmOverloads constructor(
                         textPaint.textSize = 10f * density
                         textPaint.typeface = boldTypeface
                         textPaint.textAlign = Paint.Align.LEFT
-                        val title = item.title.uppercase()
+                        val title = upperTitleCache.getOrPut(item.title) { item.title.uppercase() }
                         val baseline = KeyboardUtils.centerBaselineY((layout.top + layout.bottom) / 2f, textPaint)
                         canvas.drawText(title, 12f * density, baseline, textPaint)
                     }
@@ -506,7 +512,12 @@ class TraditionalClipboardView @JvmOverloads constructor(
                                     canvas.drawText("Xóa", textX, textBaseline, textPaint)
                                     
                                     // Draw Delete icon to the left of the text
-                                    val textW = textPaint.measureText("Xóa")
+                                    // (measured with the same 13dp bold paint as the draw above)
+                                    if (deleteLabelDensity != density) {
+                                        deleteLabelWidth = textPaint.measureText("Xóa")
+                                        deleteLabelDensity = density
+                                    }
+                                    val textW = deleteLabelWidth
                                     val iconCx = textX - textW - 14f * density
                                     drawDeleteIcon(canvas, iconCx, centerY, iconSize, Color.WHITE, paint)
                                 }

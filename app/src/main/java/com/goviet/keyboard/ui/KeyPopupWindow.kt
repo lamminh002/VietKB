@@ -47,8 +47,6 @@ class KeyPopupWindow(private val context: Context) {
     private var lastX = Int.MIN_VALUE
     private var lastY = Int.MIN_VALUE
 
-    private data class PopupPosition(val x: Int, val y: Int, val width: Int, val height: Int)
-
     private data class PopupLayout(
         val x: Int,
         val y: Int,
@@ -61,20 +59,28 @@ class KeyPopupWindow(private val context: Context) {
     private val locationBuf = IntArray(2)
 
     /**
-     * Lays out the long-press popup relative to the key, growing TOWARD the screen
-     * center so the popup never collides with the screen edges:
+     * Single anchor point for every popup placement. The popup grows TOWARD the
+     * screen center so it never collides with the screen edges:
      *
      *  - Keys on the left half (e.g. 'a'): the default option sits on the LEFT,
      *    next to the key, and additional options extend rightward.
      *  - Keys on the right half (e.g. 'o'): the default option sits on the RIGHT,
      *    next to the key, and additional options extend leftward (mirrored order).
      *
-     * The default option's slot is centered on [anchorX] (the key's screen center),
-     * so the finger is always over the currently-selected option.
+     * When [orientToKey] is false (key preview) the whole popup is simply
+     * centered on the key. Otherwise the default option's slot is centered on
+     * [PopupLayout.anchorX] (the key's screen center), so the finger is always
+     * over the currently-selected option.
      */
-    private fun computeLongPressLayout(anchorView: View, keyRect: RectF?, optionCount: Int): PopupLayout {
+    private fun anchorPopup(
+        anchorView: View,
+        keyRect: RectF?,
+        widthDp: Int,
+        optionCount: Int,
+        orientToKey: Boolean
+    ): PopupLayout {
         val density = context.density
-        val width = if (optionCount <= 1) (66 * density).toInt() else (44 * optionCount * density).toInt()
+        val width = (widthDp * density).toInt()
         val height = (72 * density).toInt()
 
         anchorView.getLocationInWindow(locationBuf)
@@ -89,14 +95,14 @@ class KeyPopupWindow(private val context: Context) {
         val margin = (8 * density).toInt()
 
         val growRight = anchorX < screenWidth / 2f
-        val slot = width.toFloat() / optionCount.coerceAtLeast(1)
 
         // Center the default option's slot on the key. For growRight the whole
         // popup starts there and extends right; for growLeft it extends left.
-        val anchoredLeft = if (growRight) {
-            anchorX - slot / 2f
+        val anchoredLeft = if (!orientToKey) {
+            anchorX - width / 2f
         } else {
-            anchorX + slot / 2f - width
+            val slot = width.toFloat() / optionCount.coerceAtLeast(1)
+            if (growRight) anchorX - slot / 2f else anchorX + slot / 2f - width
         }
         val left = anchoredLeft.coerceIn(
             margin.toFloat(),
@@ -114,36 +120,6 @@ class KeyPopupWindow(private val context: Context) {
         return PopupLayout(x, y, width, height, anchorX, growRight)
     }
 
-    private fun computePosition(anchorView: View, keyRect: RectF?, widthDp: Int): PopupPosition {
-        val density = context.density
-        val width = (widthDp * density).toInt()
-        val height = (72 * density).toInt()
-
-        anchorView.getLocationInWindow(locationBuf)
-
-        val keyCenterX = if (keyRect != null) {
-            locationBuf[0] + keyRect.centerX()
-        } else {
-            locationBuf[0] + anchorView.width / 2f
-        }
-        val idealLeft = keyCenterX - width / 2f
-        val screenWidth = context.resources.displayMetrics.widthPixels
-        val screenHeight = context.resources.displayMetrics.heightPixels
-        val margin = (8 * density).toInt()
-
-        val left = idealLeft.coerceIn(margin.toFloat(), maxOf(margin.toFloat(), (screenWidth - margin - width).toFloat()))
-
-        val x = left.toInt()
-        val yRaw = if (keyRect != null) {
-            locationBuf[1] + keyRect.top - height - 4f * density
-        } else {
-            locationBuf[1] - (70 * density)
-        }
-        val y = yRaw.toInt().coerceIn(margin, maxOf(margin, screenHeight - margin - height))
-
-        return PopupPosition(x, y, width, height)
-    }
-
     fun showPreview(
         anchorView: View,
         label: String,
@@ -155,7 +131,8 @@ class KeyPopupWindow(private val context: Context) {
         activeOptions = emptyList()
         popupView.setPreviewData(label, isDark, theme)
 
-        val (x, y, width, height) = computePosition(anchorView, keyRect, 66)
+        val layout = anchorPopup(anchorView, keyRect, widthDp = 66, optionCount = 1, orientToKey = false)
+        val (x, y, width, height) = layout
 
         val wasShowing = popupWindow.isShowing
         val oldX = lastX
@@ -189,7 +166,8 @@ class KeyPopupWindow(private val context: Context) {
     ) {
         currentMode = Mode.LONG_PRESS
         activeOptions = options
-        val layout = computeLongPressLayout(anchorView, keyRect, options.size)
+        val widthDp = if (options.size <= 1) 66 else 44 * options.size
+        val layout = anchorPopup(anchorView, keyRect, widthDp, options.size, orientToKey = true)
         hoverAnchorX = layout.anchorX
         growRight = layout.growRight
         popupView.setLongPressData(options, hoveredIdx, isDark, theme, mirrored = !layout.growRight)
@@ -246,6 +224,19 @@ class KeyPopupWindow(private val context: Context) {
         if (currentMode == Mode.LONG_PRESS) {
             popupView.updateHoverIndex(index)
         }
+    }
+
+    /**
+     * Shared hover entry point for every touch handler (QWERTY + T-pad):
+     * maps the finger to an option, repaints only when the highlight actually
+     * moves, and returns the new index for the caller to store.
+     */
+    fun trackHoverForScreenX(screenX: Float, baseIdx: Int, currentIdx: Int): Int {
+        val idx = hoverIndexForScreenX(screenX, baseIdx)
+        if (idx != currentIdx) {
+            updateHoverIndex(idx)
+        }
+        return idx
     }
 
     fun dismiss() {

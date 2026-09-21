@@ -545,6 +545,30 @@ object RimeMap {
         val len = nucleus.length
         val buf = CharArray(len)
         nucleus.toCharArray(buf, 0, 0, len)
+        applyFoldInto(buf, len, code, c1, p1)
+        return String(buf)
+    }
+
+    /**
+     * CharSequence overload — identical fold, no input snapshot allocation.
+     * Hot-path callers pass [OwnedBuffer] straight in; the folded result
+     * String is still allocated (it is stored into state).
+     */
+    @JvmStatic
+    fun applyFold(nucleus: CharSequence, code: Int): String {
+        if (code == 0) return nucleus.toString()
+        val c1 = (code ushr 3) and 0x1F
+        val p1 = code and 7
+        if (c1 >= CHAR_AT.size || p1 >= nucleus.length) return nucleus.toString()
+        val len = nucleus.length
+        val buf = CharArray(len)
+        for (i in 0 until len) buf[i] = nucleus[i]
+        applyFoldInto(buf, len, code, c1, p1)
+        return String(buf)
+    }
+
+    /** Shared in-place replacement once the working copy exists. */
+    private fun applyFoldInto(buf: CharArray, len: Int, code: Int, c1: Int, p1: Int) {
         val ch1 = CHAR_AT[c1]
         buf[p1] = if (buf[p1].isUpperCase()) ch1.uppercaseChar() else ch1
         val c2 = (code ushr 11) and 0x1F
@@ -555,7 +579,6 @@ object RimeMap {
                 buf[p2] = if (buf[p2].isUpperCase()) ch2.uppercaseChar() else ch2
             }
         }
-        return String(buf)
     }
 
     /** 12 Vietnamese base vowels (unaccented): a ă â e ê i o ô ơ u ư y. */
@@ -614,13 +637,6 @@ object RimeMap {
         'ô' -> 'o'
         'ă', 'ơ', 'ư' -> 'w'
         else -> null
-    }
-
-    /** True if the rime is a valid stop-coda rime (c, ch, p, t). */
-    @JvmStatic
-    fun isStopCoda(rime: CharSequence, start: Int = 0, length: Int = rime.length - start): Boolean {
-        if (length == 0) return false
-        return isStop(rimeKey(rime, start, length))
     }
 
     /** Validate that a rime (by precomputed flat-table key) is valid for a specific tone. */

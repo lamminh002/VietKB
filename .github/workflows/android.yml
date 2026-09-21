@@ -60,6 +60,10 @@ jobs:
     - name: Grant execute permission for gradlew
       run: chmod +x gradlew
 
+    - name: Run Unit Tests
+      run: |
+        ./gradlew testDebugUnitTest --stacktrace
+
     - name: Build Release APK
       run: |
         ./gradlew assembleRelease -Pandroid.builder.sdkDownload=true --stacktrace

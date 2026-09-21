@@ -54,8 +54,6 @@ class VietnameseInputMethodService : InputMethodService(), LifecycleOwner, ViewM
     lateinit var keyboardUIManager: KeyboardUIManager
 
     var lastCommittedWord: String? = null
-    var currentSelStart = 0
-    var currentSelEnd = 0
 
     // StateFlow states which UI will read and re-compose upon
     val _languageMode = MutableStateFlow("VIE") // "VIE" or "ENG"
@@ -67,19 +65,19 @@ class VietnameseInputMethodService : InputMethodService(), LifecycleOwner, ViewM
     val _recentEmojis = MutableStateFlow<List<String>>(emptyList())
     val _recentSymbols = MutableStateFlow<List<String>>(emptyList())
 
-    // Input methods list and the active index of the currently selected one
-    val inputMethods = listOf("Vietnamese", "Bamboo", "English", "Pinyin")
-    val currentInputMethodIndex = MutableStateFlow(0) // 0: Vietnamese, 1: Bamboo, 2: English, 3: Pinyin
+    // Input methods list and the active index of the currently selected one.
+    val inputMethods = listOf("Vietnamese", "English")
+    val currentInputMethodIndex = MutableStateFlow(0) // 0: Vietnamese, 1: English
 
     private fun applyInputMethod(index: Int) {
         currentInputMethodIndex.value = index
-        _languageMode.value = if (index == 0 || index == 1) "VIE" else "ENG"
+        _languageMode.value = if (index == 0) "VIE" else "ENG"
         inputProcessor.clearState()
         currentInputConnection?.finishComposingText()
     }
 
     fun toggleLanguage() {
-        val newIndex = if (_languageMode.value == "VIE") 2 else 0
+        val newIndex = if (_languageMode.value == "VIE") 1 else 0
         applyInputMethod(newIndex)
     }
 
@@ -167,8 +165,6 @@ class VietnameseInputMethodService : InputMethodService(), LifecycleOwner, ViewM
     }
 
     override fun onStartInputView(info: EditorInfo?, restarting: Boolean) {
-        currentSelStart = info?.initialSelStart ?: 0
-        currentSelEnd = info?.initialSelEnd ?: 0
         val packageName = info?.packageName ?: "unknown"
         val fieldId = info?.fieldId ?: 0
         val inputType = info?.inputType ?: 0
@@ -397,11 +393,6 @@ class VietnameseInputMethodService : InputMethodService(), LifecycleOwner, ViewM
         keyboardRootView?.handleSettingsReset()
     }
 
-    override fun onEvaluateFullscreenMode(): Boolean {
-        val superResult = super.onEvaluateFullscreenMode()
-        return superResult
-    }
-
     override fun onEvaluateInputViewShown(): Boolean {
         val superResult = super.onEvaluateInputViewShown()
         return true
@@ -412,8 +403,6 @@ class VietnameseInputMethodService : InputMethodService(), LifecycleOwner, ViewM
         newSelStart: Int, newSelEnd: Int,
         candidatesStart: Int, candidatesEnd: Int
     ) {
-        currentSelStart = newSelStart
-        currentSelEnd = newSelEnd
         inputProcessor.onUpdateSelection(oldSelStart, oldSelEnd, newSelStart, newSelEnd, candidatesStart, candidatesEnd)
         super.onUpdateSelection(oldSelStart, oldSelEnd, newSelStart, newSelEnd, candidatesStart, candidatesEnd)
 
@@ -427,15 +416,6 @@ class VietnameseInputMethodService : InputMethodService(), LifecycleOwner, ViewM
         if (newSelStart == newSelEnd && !inputProcessor.inputEngine.isComposing()) {
             evaluateAutoShift(forceIpc = isIdle)
         }
-    }
-
-    internal fun getLastWordFromText(text: String): String? {
-        val trimmed = text.trimEnd()
-        if (trimmed.isEmpty()) return null
-        val lastSpace = trimmed.lastIndexOf(' ')
-        val rawWord = if (lastSpace == -1) trimmed else trimmed.substring(lastSpace + 1)
-        val cleaned = rawWord.filter { it.isLetter() || it.isDigit() }
-        return if (cleaned.isNotEmpty()) cleaned else null
     }
 
     // Direct delegation APIs matching UI expectations perfectly
@@ -465,14 +445,6 @@ class VietnameseInputMethodService : InputMethodService(), LifecycleOwner, ViewM
 
     fun getNavigationBarHeight(): Int {
         return keyboardUIManager.getNavigationBarHeight()
-    }
-
-    fun commitAndReset() {
-        inputProcessor.commitAndReset()
-    }
-
-    fun commitAndFinishing() {
-        commitAndReset()
     }
 
     fun openSettings() {

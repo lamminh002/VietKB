@@ -122,12 +122,7 @@ class TraditionalEmojiView @JvmOverloads constructor(
                 bottomContainerBottom
             )
             key.visualRect.set(key.rect)
-            key.shadowRect.set(
-                key.rect.left,
-                key.rect.top + 0.8f * density,
-                key.rect.right,
-                key.rect.bottom + 1.2f * density
-            )
+            key.applyShadow(density)
             curX += keyBoundingW + horizontalSpacing
         }
 

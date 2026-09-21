@@ -21,63 +21,63 @@ abstract class BaseKeyGridView @JvmOverloads constructor(
         set(value) {
             if (field != value) {
                 field = value
-                invalidate()
+                if (!suppressThemeInvalidate) invalidate()
             }
         }
     open var textColor: Int = 0xFFFFFFFF.toInt()
         set(value) {
             if (field != value) {
                 field = value
-                invalidate()
+                if (!suppressThemeInvalidate) invalidate()
             }
         }
     open var subTextColor: Int = 0x80FFFFFF.toInt()
         set(value) {
             if (field != value) {
                 field = value
-                invalidate()
+                if (!suppressThemeInvalidate) invalidate()
             }
         }
     open var panelBgColor: Int = 0xFF1E2431.toInt()
         set(value) {
             if (field != value) {
                 field = value
-                invalidate()
+                if (!suppressThemeInvalidate) invalidate()
             }
         }
     open var keyBgColor: Int = 0xFF2E3544.toInt()
         set(value) {
             if (field != value) {
                 field = value
-                invalidate()
+                if (!suppressThemeInvalidate) invalidate()
             }
         }
     open var keyPressedBgColor: Int = 0xFF454E63.toInt()
         set(value) {
             if (field != value) {
                 field = value
-                invalidate()
+                if (!suppressThemeInvalidate) invalidate()
             }
         }
     open var functionalKeyBgColor: Int = 0xFF1E2431.toInt()
         set(value) {
             if (field != value) {
                 field = value
-                invalidate()
+                if (!suppressThemeInvalidate) invalidate()
             }
         }
     open var functionalKeyPressedBgColor: Int = 0xFF283144.toInt()
         set(value) {
             if (field != value) {
                 field = value
-                invalidate()
+                if (!suppressThemeInvalidate) invalidate()
             }
         }
     open var activeAccentColor: Int = 0xFF1E2431.toInt()
         set(value) {
             if (field != value) {
                 field = value
-                invalidate()
+                if (!suppressThemeInvalidate) invalidate()
             }
         }
 
@@ -91,14 +91,12 @@ abstract class BaseKeyGridView @JvmOverloads constructor(
         activeAccentColor = activeAccentColor,
         isDark = isDark
     )
-    private var themeVersion: Long = 0L
-
     open var keyStyle: Int = 0
         set(value) {
             if (field != value) {
                 field = value
                 showKeyBorders = (value == 0)
-                invalidate()
+                if (!suppressThemeInvalidate) invalidate()
             }
         }
 
@@ -106,9 +104,14 @@ abstract class BaseKeyGridView @JvmOverloads constructor(
         set(value) {
             if (field != value) {
                 field = value
-                invalidate()
+                if (!suppressThemeInvalidate) invalidate()
             }
         }
+
+    // When true, per-property setters skip their own invalidate(); used by
+    // updateTheme() so a theme switch costs exactly one redraw, not one per
+    // changed color. Property logic (e.g. keyStyle -> showKeyBorders) still runs.
+    private var suppressThemeInvalidate = false
 
     protected val density get() = context.density
     protected val keyCornerRadius get() = 10f * density
@@ -138,16 +141,20 @@ abstract class BaseKeyGridView @JvmOverloads constructor(
             changed = true
         }
         if (this.currentTheme == theme && !changed) return
-        this.textColor = theme.textColor
-        this.subTextColor = theme.subTextColor
-        this.keyBgColor = theme.keyBgColor
-        this.keyPressedBgColor = theme.keyPressedBgColor
-        this.functionalKeyBgColor = theme.functionalKeyBgColor
-        this.functionalKeyPressedBgColor = theme.functionalKeyPressedBgColor
-        this.activeAccentColor = theme.activeAccentColor
-        this.isDark = theme.isDark
-        this.currentTheme = theme
-        themeVersion++
+        suppressThemeInvalidate = true
+        try {
+            this.textColor = theme.textColor
+            this.subTextColor = theme.subTextColor
+            this.keyBgColor = theme.keyBgColor
+            this.keyPressedBgColor = theme.keyPressedBgColor
+            this.functionalKeyBgColor = theme.functionalKeyBgColor
+            this.functionalKeyPressedBgColor = theme.functionalKeyPressedBgColor
+            this.activeAccentColor = theme.activeAccentColor
+            this.isDark = theme.isDark
+            this.currentTheme = theme
+        } finally {
+            suppressThemeInvalidate = false
+        }
         invalidate()
     }
 
@@ -184,54 +191,6 @@ abstract class BaseKeyGridView @JvmOverloads constructor(
             isSpecialEnter = key.isSpecialEnter,
             bgColor = bgColor,
             pressedBgColor = pressedBg
-        )
-    }
-
-    protected fun drawKeyBackground(
-        canvas: Canvas,
-        rect: RectF,
-        isPressed: Boolean,
-        isFunctional: Boolean,
-        isSpecialEnter: Boolean
-    ) {
-        val scale = if (isPressed) 0.96f else 1.0f
-        val w = rect.width()
-        val h = rect.height()
-        val cx = rect.centerX()
-        val cy = rect.centerY()
-
-        drawRect.set(
-            cx - w * scale / 2f,
-            cy - h * scale / 2f,
-            cx + w * scale / 2f,
-            cy + h * scale / 2f
-        )
-
-        val bgColor = if (isSpecialEnter || isFunctional) functionalKeyBgColor else keyBgColor
-        val pressedBgColor = if (isFunctional || isSpecialEnter) functionalKeyPressedBgColor else keyPressedBgColor
-
-        if (!isPressed && keyStyle == 0) {
-            shadowDrawRect.set(
-                drawRect.left,
-                drawRect.top + 0.8f * density,
-                drawRect.right,
-                drawRect.bottom + 1.2f * density
-            )
-        }
-
-        KeyRenderer.drawStandardKey(
-            canvas = canvas,
-            drawRect = drawRect,
-            shadowRect = shadowDrawRect,
-            cornerRadius = keyCornerRadius,
-            density = density,
-            isDark = isDark,
-            keyStyle = keyStyle,
-            isPressed = isPressed,
-            isFunctional = isFunctional,
-            isSpecialEnter = isSpecialEnter,
-            bgColor = bgColor,
-            pressedBgColor = pressedBgColor
         )
     }
 }

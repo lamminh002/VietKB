@@ -26,7 +26,6 @@ open class TraditionalSettingsView @JvmOverloads constructor(
             field = value
             invalidate()
         }
-    var alwaysMacro: Boolean = false
     var autoCapitalize: Boolean = false
         set(value) {
             field = value
@@ -119,6 +118,14 @@ open class TraditionalSettingsView @JvmOverloads constructor(
     private val simulatedShadowRect = RectF()
     private val styleKeyRect = RectF()
 
+    // Resource-string cache: every resId drawn here is static, and a locale
+    // change recreates views, so resolve-once is behavior-identical.
+    // (State-dependent value subtexts intentionally stay live lookups.)
+    private val prefTitle: String = context.getString(R.string.pref_title)
+    private val stringCache = HashMap<Int, String>()
+    private fun cachedString(resId: Int): String =
+        stringCache.getOrPut(resId) { context.getString(resId) }
+
     private val themeModes = listOf("system", "light", "dark", "dynamic")
     private val themeLabelsResIds = listOf(
         R.string.pref_theme_system_cap,
@@ -199,7 +206,6 @@ open class TraditionalSettingsView @JvmOverloads constructor(
         when (index) {
             0 -> {
                 macroEnabled = !macroEnabled
-                alwaysMacro = macroEnabled
             }
             1 -> {
                 autoCapitalize = !autoCapitalize
@@ -364,7 +370,7 @@ open class TraditionalSettingsView @JvmOverloads constructor(
             textPaint.textSize = 12f * density
             textPaint.typeface = boldTypeface
             textPaint.textAlign = Paint.Align.LEFT
-            canvas.drawText(context.getString(R.string.pref_title), padding + 22f * density, padding + 12f * density, textPaint)
+            canvas.drawText(prefTitle, padding + 22f * density, padding + 12f * density, textPaint)
 
             IconDrawer.draw(
                 canvas = canvas,
@@ -420,7 +426,7 @@ open class TraditionalSettingsView @JvmOverloads constructor(
                 textPaint.typeface = boldTypeface
                 textPaint.textAlign = Paint.Align.CENTER
                 val titleY = cy + circleRadius + 12f * density
-                canvas.drawText(context.getString(item.titleResId), cx, titleY, textPaint)
+                canvas.drawText(cachedString(item.titleResId), cx, titleY, textPaint)
 
                 // Value Subtext
                 val subText = if (!item.isToggle) {
@@ -432,7 +438,7 @@ open class TraditionalSettingsView @JvmOverloads constructor(
                     }
                 } else {
                     val valBool = getToggleValue(item.toggleIndex)
-                    if (valBool) context.getString(R.string.pref_status_on) else context.getString(R.string.pref_status_off)
+                    if (valBool) cachedString(R.string.pref_status_on) else cachedString(R.string.pref_status_off)
                 }
 
                 textPaint.color = getColorWithAlpha(if (isToggleActive) activeAccentColor else subTextColor, alpha)
@@ -468,9 +474,9 @@ open class TraditionalSettingsView @JvmOverloads constructor(
         } else {
             // SubMenu Header
             val titleText = when (activeSubMenu) {
-                SubMenu.STYLE -> context.getString(R.string.pref_submenu_style)
-                SubMenu.THEME -> context.getString(R.string.pref_submenu_theme)
-                SubMenu.PADDING -> context.getString(R.string.pref_submenu_padding)
+                SubMenu.STYLE -> cachedString(R.string.pref_submenu_style)
+                SubMenu.THEME -> cachedString(R.string.pref_submenu_theme)
+                SubMenu.PADDING -> cachedString(R.string.pref_submenu_padding)
                 else -> ""
             }
             textPaint.color = getColorWithAlpha(textColor, alpha)
@@ -521,7 +527,7 @@ open class TraditionalSettingsView @JvmOverloads constructor(
                         textPaint.textSize = 9.5f * density
                         textPaint.typeface = boldTypeface
                         textPaint.textAlign = Paint.Align.CENTER
-                        canvas.drawText(context.getString(styleLabelResIds[i]), cx, rect.top + 36f * density, textPaint)
+                        canvas.drawText(cachedString(styleLabelResIds[i]), cx, rect.top + 36f * density, textPaint)
 
                         styleKeyRect.set(cx - 14f * density, rect.centerY() - 4f * density, cx + 14f * density, rect.centerY() + 16f * density)
                         drawSimulatedKey(canvas, styleKeyRect, "A", i, isOptionSelected, alpha)
@@ -589,7 +595,7 @@ open class TraditionalSettingsView @JvmOverloads constructor(
                         textPaint.typeface = boldTypeface
                         textPaint.textAlign = Paint.Align.LEFT
                         val baseline = KeyboardUtils.centerBaselineY(rect, textPaint)
-                        canvas.drawText(context.getString(themeLabelsResIds[i]), rect.left + 36f * density, baseline, textPaint)
+                        canvas.drawText(cachedString(themeLabelsResIds[i]), rect.left + 36f * density, baseline, textPaint)
 
                         if (isOptionSelected) {
                             drawCheckmarkBadge(canvas, rect, alpha)
@@ -643,7 +649,7 @@ open class TraditionalSettingsView @JvmOverloads constructor(
                         textPaint.typeface = boldTypeface
                         textPaint.textAlign = Paint.Align.LEFT
                         val baseline = KeyboardUtils.centerBaselineY(rect, textPaint)
-                        canvas.drawText(context.getString(paddingLabelsResIds[i]), rect.left + 36f * density, baseline, textPaint)
+                        canvas.drawText(cachedString(paddingLabelsResIds[i]), rect.left + 36f * density, baseline, textPaint)
 
                         if (isOptionSelected) {
                             drawCheckmarkBadge(canvas, rect, alpha)
@@ -786,7 +792,6 @@ open class TraditionalSettingsView @JvmOverloads constructor(
                                 }
                             }
                             SubMenu.THEME -> {
-                                val themeModes = listOf("system", "light", "dark", "dynamic")
                                 if (i in 0..3 && themeButtonRects[i].contains(x, y)) {
                                     val mode = themeModes[i]
                                     themeMode = mode
