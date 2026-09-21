@@ -258,18 +258,11 @@ class ImeInputConnectionController(
         }
 
         if (inputEngine.isComposing()) {
-            val ic = service.currentInputConnection
-            if (ic != null) {
-                ic.beginBatchEdit()
-                try {
-                    ic.finishComposingText()
-                    clearState()
-                } finally {
-                    ic.endBatchEdit()
-                }
-            } else {
-                clearState()
-            }
+            // No finishComposingText(): no composing span exists in
+            // direct-commit mode, so there is nothing to finish — just drop
+            // engine state. Calling it would only add a useless IPC plus
+            // another callback round-trip for flicker-prone editors.
+            clearState()
         }
 
         val ic = service.currentInputConnection
@@ -366,19 +359,6 @@ class ImeInputConnectionController(
         val request = android.view.inputmethod.ExtractedTextRequest()
         request.token = 0
         return ic.getExtractedText(request, 0)
-    }
-
-    /**
-     * Fresh caret position with no selection, or -1 when unknown. Never uses
-     * caches: this verifies tracked preedit bounds right before an
-     * absolute-range edit (select), so a stale start can never mangle text.
-     * Costs one IPC, hence only used on the rewrite path (not per keystroke).
-     */
-    private fun queryCaretIfClean(ic: InputConnection): Int {
-        val ex = queryExtractedText(ic) ?: return -1
-        val s = ex.selectionStart
-        val e = ex.selectionEnd
-        return if (s >= 0 && s == e) s else -1
     }
 
     /** True caret selection, race-free — used by the delete paths. */
@@ -568,22 +548,10 @@ class ImeInputConnectionController(
      * underline is ever drawn, while the engine buffer keeps full Telex
      * behavior (transforms on next key, adoption, grapheme backspace).
      *
-     * Three cases, fewest editor ops first:
-     * - Fresh/append/truncate: a single commit or delete op — atomic by
-     *   definition, zero flicker possible.
-     * - True rewrite (fold/tone transforms, e.g. thay -> thấy, aa -> â):
-     *   select the old word so commitText swaps it in a single editor op.
-     *   Text content never passes through an intermediate state (no empty
-     *   flash, no reflow, no text-callback churn for batch-ignoring editors
-     *   like Zalo) — strictly better than delete+commit, whose transient
-     *   prefix flickers randomly with vsync alignment. Worst case a
-     *   one-frame selection highlight; the transient selection callback may
-     *   briefly flag userMovedCursor, cleared by the registered end-caret
-     *   right after (worst case a redundant re-adoption next key).
-     * - Preedit start unknown: legacy delete+commit fallback.
-     *
-     * A mid-preedit caret is parked at the end first (registered as ours)
-     * and restored by the caller via the usual moveCursorTo/register path.
+     * Fewest editor ops first: pure append commits the new tail, pure
+     * truncation deletes the tail (both single atomic ops). True rewrites
+     * go through middle-diff (common prefix+suffix trim, never selecting),
+     * so no selection highlight and no empty transient can ever draw.
      * Editor-state only: callers own lastSetComposingText bookkeeping.
      */
     fun syncPreeditDirect(ic: InputConnection, display: String) {
@@ -604,22 +572,41 @@ class ImeInputConnectionController(
             return
         }
         if (composingStartInEditor >= 0) {
-            if (composingCursorIndex != inputEngine.composingRawLength()) {
-                // Mid-preedit caret (resync flows restore it right after):
-                // park at the end first, making the absolute select exact.
-                selectionGuard.moveTo(ic, composingStartInEditor + lastStr.length)
-            } else if (queryCaretIfClean(ic) != composingStartInEditor + lastStr.length) {
-                // End caret assumed but unproven (IPC hiccup): fall through
-                // to minimal-diff below rather than selecting blindly.
-                return syncMinimalDiff(ic, lastStr, display)
-            }
-            // Caret at the preedit end (parked or proven): select the old
-            // word so commitText swaps it in a single editor op.
-            ic.setSelection(composingStartInEditor, composingStartInEditor + lastStr.length)
-            ic.commitText(display, 1)
-            return
+            // Middle-diff rewrite (common prefix+suffix trim, never
+            // selecting): exact for end caret, parked-then-exact for mid
+            // caret. No selection highlight and no empty transient ever.
+            return syncMiddleDiff(ic, lastStr, display)
         }
         return syncMinimalDiff(ic, lastStr, display)
+    }
+
+    /**
+     * Middle-diff rewrite: common prefix AND suffix trim, never selecting.
+     * End caret behaves like minimal-diff (caret lands at the end); mid
+     * caret parks first and the caller restores it afterwards via the usual
+     * moveCursorTo/register path.
+     */
+    private fun syncMiddleDiff(ic: InputConnection, lastStr: String, display: String) {
+        val midRaw = composingCursorIndex != inputEngine.composingRawLength()
+        if (!midRaw) {
+            return syncMinimalDiff(ic, lastStr, display)
+        }
+        val totalOld = lastStr.length
+        val totalNew = display.length
+        var p = 0
+        while (p < minOf(totalOld, totalNew) && lastStr[p] == display[p]) p++
+        var s = 0
+        while (s < minOf(totalOld, totalNew) - p &&
+            lastStr[totalOld - 1 - s] == display[totalNew - 1 - s]) s++
+        selectionGuard.moveTo(ic, composingStartInEditor + totalOld - s)
+        val del = totalOld - s - p
+        if (del > 0) {
+            ic.deleteSurroundingText(del, 0)
+        }
+        val newMid = display.substring(p, totalNew - s)
+        if (newMid.isNotEmpty()) {
+            ic.commitText(newMid, 1)
+        }
     }
 
     /**

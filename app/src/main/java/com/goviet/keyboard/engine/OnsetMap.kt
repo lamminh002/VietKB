@@ -57,6 +57,10 @@ object OnsetMap {
         for (o in ALL_ONSETS) table.insertOr(onsetKey(o), 0x01)
         val openUoOnsets = arrayOf("h", "th", "kh", "qu", "l")
         for (o in openUoOnsets) table.insertOr(onsetKey(o), 0x04)
+        val requireVowelOnsets = arrayOf("gi")
+        for (o in requireVowelOnsets) table.insertOr(onsetKey(o), 0x08)
+        val parkEarlyToneOnsets = arrayOf("gi")
+        for (o in parkEarlyToneOnsets) table.insertOr(onsetKey(o), 0x10)
         val dSlot = table.find(onsetKey("d"))
         if (dSlot >= 0) {
             _fold[dSlot] = foldCode(0, 'đ').toByte()
@@ -65,6 +69,32 @@ object OnsetMap {
             _foldKeySet['d'.code] = true
         }
     }
+
+    private fun hasFlag(cs: CharSequence, start: Int, length: Int, flag: Int): Boolean {
+        if (length == 0) return false
+        val i = table.find(onsetKey(cs, start, length))
+        return i >= 0 && (table.data[i].toInt() and flag) != 0
+    }
+
+    /**
+     * True when the onset only wins as an onset if a vowel follows — the 'gi'
+     * family, whose final 'i' otherwise becomes the nucleus (gif → g + i + f).
+     */
+    @JvmStatic
+    fun isOnsetNeedingVowel(cs: CharSequence, start: Int = 0, length: Int = cs.length - start): Boolean =
+        hasFlag(cs, start, length, 0x08)
+
+    @JvmStatic
+    fun isOnsetNeedingVowel(onset: CharSequence): Boolean = isOnsetNeedingVowel(onset, 0, onset.length)
+
+    /** True when the onset parks the early tone keys (deferred until the
+     *  nucleus starts) — the 'gi' family. */
+    @JvmStatic
+    fun isOnsetParkingEarlyTone(cs: CharSequence, start: Int = 0, length: Int = cs.length - start): Boolean =
+        hasFlag(cs, start, length, 0x10)
+
+    @JvmStatic
+    fun isOnsetParkingEarlyTone(onset: CharSequence): Boolean = isOnsetParkingEarlyTone(onset, 0, onset.length)
 
     /**
      * True when [c] is a fold key that actually has a target in the table.

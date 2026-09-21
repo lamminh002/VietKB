@@ -47,7 +47,7 @@ class BackspaceReplayTest {
             "tha" to "tha",
             "th" to "th",
             "t" to "t",
-            "thươn" to "thuwon",
+            "thươn" to "thuwown",
             "toá" to "toas"
         )
         for ((display, canonical) in steps) {

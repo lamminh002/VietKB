@@ -23,7 +23,11 @@ object RimeMap {
         val tnOld: Int = tnNew,
         /** Tone position for the closed rime (coda present).  When
          *  different from [tnNew] it encodes the terminated vs open distinction. */
-        val tnNewCoda: Int = tnNew
+        val tnNewCoda: Int = tnNew,
+/** When non-null, [nucleus] is a parked display alias of [aliasOf]: it stays
+        *  in its own form until a continuation [aliasOf] accepts resolves it;
+        *  extension/tone/coda math runs on [aliasOf]'s key throughout. */
+        val aliasOf: String? = null
     )
 
     val C_ALL   = arrayOf("c","ch","p","t","m","n","ng","nh")
@@ -110,28 +114,26 @@ object RimeMap {
     private lateinit var _combineKeys: IntArray
     private lateinit var _combineVals: Array<String>
 
+    /** Parked alias display → its resolved nucleus (see [NucSpec.aliasOf]). */
+    private val aliasNuc = HashMap<Int, String>()
+
+    /** Parked alias display → the key the extension/tone math runs on. */
+    private val aliasEffKey = HashMap<Int, Int>()
+
     /** Initialize the flat map and syllable prefix table.  Called once at class load time. */
     init { build()
         generateSyllableTable()
     }
 
-    /** Canonical raw keystroke for nuclei where naive char-by-char is wrong.
-     *  (w-compound: the w serves double duty — u+w→ư, then the following
-     *   vowel folds via the combination path, not its own 'w'.) */
-    private fun rawOverride(nuc: String): String? = when (nuc) {
-        "ươ" -> "uwo"; "ươi" -> "uowi"; "ươu" -> "uowu"; else -> null
-    }
-
-    /** Canonical Telex raw keystroke for a display nucleus.
-     *  For single vowels + simple compounds, char-by-char via the vowel→raw table.
-     *  For w-compounds with double-duty 'w' (computed by Telex combination path),
-     *  explicit override from [rawOverride].  Case-insensitive: caller handles case. */
+    /**
+     * Canonical Telex raw for a display nucleus. Closing semivowels (i, y, u,
+     * o) type literally like codas, so ươn/ươi/ươu all derive by append:
+     * uwown, uwowi, uwowu. Case handled by the caller.
+     */
     @JvmStatic
     fun rawKeyForNucleus(nuc: String): String {
-        val n = nuc.lowercase()
-        rawOverride(n)?.let { return it }
         val sb = StringBuilder()
-        for (c in n) sb.append(
+        for (c in nuc.lowercase()) sb.append(
             when (c) {
                 'ă' -> "aw"; 'â' -> "aa"; 'ê' -> "ee"
                 'ô' -> "oo"; 'ơ' -> "ow"; 'ư' -> "uw"
@@ -163,7 +165,7 @@ object RimeMap {
             NucSpec("uê", C_UE,    1, 1), NucSpec("uô", C_SHORT,1, 1),
             NucSpec("uo", C_SHORT, 1, 1), NucSpec("ua", C_UA,   0, 0, tnNewCoda=1),
             NucSpec("ưa", C_NONE,  0),    NucSpec("uơ", C_NONE, 1),
-            NucSpec("ươ", C_SHORT, 1, 1), NucSpec("ia", C_NONE, 0),
+            NucSpec("ươ", C_SHORT, 1, 1), NucSpec("ưo", C_NONE, 1, 1, aliasOf = "ươ"), NucSpec("ia", C_NONE, 0),
             NucSpec("ie", C_SHORT, 1, 1), NucSpec("iê", C_SHORT,1, 1),
             NucSpec("ye", C_TMNG,  1, 1), NucSpec("yê", C_TMNG, 1, 1),
             NucSpec("oo", C_OO,    1, 1),
@@ -191,6 +193,13 @@ object RimeMap {
             NucSpec("uâu", C_NONE, 1), NucSpec("uây", C_NONE, 1),
             NucSpec("ueu", C_NONE, 1), NucSpec("uêu", C_NONE, 1),
         )
+
+        for (spec in _nuclei) {
+            val target = spec.aliasOf ?: continue
+            val key = rimeKey(spec.nucleus)
+            aliasNuc[key] = target
+            aliasEffKey[key] = rimeKey(target)
+        }
 
         val allRimes = mutableListOf<String>()
 
@@ -231,10 +240,6 @@ object RimeMap {
 
         val rawToDisplay = HashMap<String, String>(_nuclei.size * 2)
         for (spec in _nuclei) rawToDisplay[rawKeyForNucleus(spec.nucleus)] = spec.nucleus
-        for (spec in _nuclei) {
-            val override = rawOverride(spec.nucleus.lowercase())
-            if (override != null) rawToDisplay[override] = spec.nucleus
-        }
         val plainVowels = charArrayOf('a', 'e', 'i', 'o', 'u')
         for (spec in _nuclei) {
             val baseRaw = rawKeyForNucleus(spec.nucleus)
@@ -480,6 +485,46 @@ object RimeMap {
      */
     @JvmStatic
     fun foldSlot(nucleusKey: Int): Int = table.find(nucleusKey)
+
+    /**
+     * Resolved nucleus for a parked alias display (own key → aliasOf), or null.
+     * The caller preserves the display's casing on the resolved string.
+     */
+    @JvmStatic
+    fun aliasDisplay(display: CharSequence): String? = aliasNuc[rimeKey(display)]
+
+    /**
+     * Rime key the extension/tone math must run on for [display]: the resolved
+     * alias key for a parked alias, otherwise [candidateKey] as-is.
+     */
+    @JvmStatic
+    fun effectiveNucleusKey(candidateKey: Int, display: CharSequence): Int =
+        aliasEffKey[rimeKey(display)] ?: candidateKey
+
+    /**
+     * Fold-data slot: a parked alias folds on its own key ("ưo" w→ơ → "ươ"),
+     * while its extension math runs on the resolved key; every real nucleus
+     * behaves exactly like [foldSlot].
+     */
+    @JvmStatic
+    fun foldSlotForDisplay(effectiveKey: Int, display: CharSequence): Int {
+        val displayKey = rimeKey(display)
+        if (displayKey == effectiveKey) return table.find(displayKey)
+        val slot = table.find(displayKey)
+        return if (slot >= 0) slot else table.find(effectiveKey)
+    }
+
+    /**
+     * FOLD start target: when the nucleus is still empty the fold key [c] starts
+     * a standalone vowel in Telex mode ('w' → ư, directW off).  The mapping lives
+     * here with the other vowel data so the composer holds no vowel literals;
+     * returns '\u0000' when [c] starts no rime.
+     */
+    @JvmStatic
+    fun startFoldChar(c: Char): Char = when (c.lowercaseChar()) {
+        'w' -> 'ư'
+        else -> '\u0000'
+    }
 
     /** 'e' fold code for a slot from [foldSlot]; 0 = none. */
     @JvmStatic

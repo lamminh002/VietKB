@@ -28,7 +28,7 @@ object EditedVietnameseRecognizer {
         val onsetLen = OnsetMap.longestOnsetPrefix(stripped)
         val rime = stripped.substring(onsetLen)
         if (rime.isEmpty()) return false
-
+        // The parked display "ưo" is a table rime, so no special case here.
         if (!RimeMap.isValidPrefix(RimeMap.rimeKey(rime))) return false
         return rime.any { RimeMap.isBaseVowel(it) }
     }

@@ -406,7 +406,8 @@ class HomeScreenView(private val activity: MainActivity) : ScreenView {
             surfaceVariantColor,
             rippleColorVal
         )
-        
+
         container.addView(infoCard)
+
     }
 }
