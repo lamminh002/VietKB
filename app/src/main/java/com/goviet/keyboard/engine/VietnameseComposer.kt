@@ -32,6 +32,10 @@ class VietnameseComposer(var options: EngineOptions = EngineOptions()) {
     class SyllableState(
         var onset: OwnedBuffer = OwnedBuffer(),
         var nucleus: OwnedBuffer = OwnedBuffer(),
+        /** Bán âm cuối (closing glide i/y/u/o) — separate from the core so the
+         *  rime mirrors the Vietnamese syllable structure: onset + nucleus +
+         *  semi-coda + coda. Folds and tones address the core through it. */
+        var semiCoda: OwnedBuffer = OwnedBuffer(),
         var coda: OwnedBuffer = OwnedBuffer(),
         var tone: Tone = Tone.NONE,
         var rawSuffix: OwnedBuffer = OwnedBuffer()
@@ -42,11 +46,13 @@ class VietnameseComposer(var options: EngineOptions = EngineOptions()) {
         fun reset() {
             onset.clear()
             nucleus.clear()
+            semiCoda.clear()
             coda.clear()
             tone = Tone.NONE
             rawSuffix.clear()
         }
-        fun isEmpty(): Boolean = onset.isEmpty() && nucleus.isEmpty() && coda.isEmpty() && rawSuffix.isEmpty()
+        fun isEmpty(): Boolean = onset.isEmpty() && nucleus.isEmpty() && semiCoda.isEmpty() &&
+            coda.isEmpty() && rawSuffix.isEmpty()
 
         fun toDisplayString(oldTonePlacement: Boolean = false): String {
             toDisplayBuffer(displayScratch, oldTonePlacement)
@@ -59,13 +65,18 @@ class VietnameseComposer(var options: EngineOptions = EngineOptions()) {
             if (tone == Tone.NONE || nucleus.isEmpty()) {
                 for (i in 0 until onset.length) out.append(onset[i])
                 for (i in 0 until nucleus.length) out.append(nucleus[i])
+                for (i in 0 until semiCoda.length) out.append(semiCoda[i])
                 for (i in 0 until coda.length) out.append(coda[i])
                 for (i in 0 until rawSuffix.length) out.append(rawSuffix[i])
                 return
             }
-            val rimeKey = RimeMap.keyCat(nucleus, nucleus.length, coda, coda.length)
+            // Rime key spans the core and the semi-coda together; tone index
+            // addresses the core (semi-coda never hosts a tone mark).
+            val rimeKey = RimeMap.extendKey(
+                RimeMap.keyCat(nucleus, nucleus.length, semiCoda, semiCoda.length),
+                coda, 0, coda.length)
             var toneIdx = RimeMap.determineTonePosition(
-                rimeKey, oldTonePlacement, nucleus.length)
+                rimeKey, oldTonePlacement, nucleus.length + semiCoda.length)
             if (coda.isEmpty() && rawSuffix.isNotEmpty()) {
                 val pending = pendingFoldCodaIndex()
                 if (pending >= 0) toneIdx = pending
@@ -75,6 +86,7 @@ class VietnameseComposer(var options: EngineOptions = EngineOptions()) {
                 if (i == toneIdx) out.append(VietnameseUnicode.applyTone(nucleus[i], tone))
                 else out.append(nucleus[i])
             }
+            for (i in 0 until semiCoda.length) out.append(semiCoda[i])
             for (i in 0 until coda.length) out.append(coda[i])
             for (i in 0 until rawSuffix.length) out.append(rawSuffix[i])
         }
@@ -217,6 +229,24 @@ class VietnameseComposer(var options: EngineOptions = EngineOptions()) {
         matchOnset(raw, out)
         scanCtx.reset(if (out.onset.isEmpty()) 0 else OnsetMap.onsetKeyOf(out.onset))
         scanBody(raw, out, scanCtx)
+        splitTrailingGlide(out)
+    }
+
+    /**
+     * Splits a trailing closing glide (bán âm cuối i/y/u/o) off the core into
+     * [SyllableState.semiCoda], so the state mirrors the Vietnamese structure
+     * onset + nucleus + semi-coda. Runs at the end of resegment; the render
+     * and rime-key paths already span core+glide, so the display is untouched.
+     */
+    private fun splitTrailingGlide(out: SyllableState) {
+        if (out.semiCoda.isNotEmpty() || out.coda.isNotEmpty() || out.rawSuffix.isNotEmpty()) return
+        val nuc = out.nucleus
+        if (nuc.length < 2) return
+        val last = nuc[nuc.length - 1].lowercaseChar()
+        if (!RimeMap.isClosingGlide(last)) return
+        if (!RimeMap.isGlideFinalRime(RimeMap.rimeKey(nuc, 0, nuc.length))) return
+        out.semiCoda.append(nuc[nuc.length - 1])
+        nuc.setLength(nuc.length - 1)
     }
 
     /** Test API: resegment [raw] into a fresh state (the resegment the kernel
@@ -509,7 +539,7 @@ class VietnameseComposer(var options: EngineOptions = EngineOptions()) {
             if (ctx.fold.active && cLow == ctx.fold.key &&
                 (pos == ctx.fold.rawPos + 1 ||
                     (out.coda.isNotEmpty() && pos > ctx.fold.rawPos)) &&
-                !out.nucleus.contentEquals(ctx.fold.plainNucleus)) {
+                !rimeString(out).contentEquals(ctx.fold.plainNucleus)) {
                 if (ctx.fold.standalone) {
                     out.nucleus.clear()
                     out.rawSuffix.append(c)
@@ -524,7 +554,7 @@ class VietnameseComposer(var options: EngineOptions = EngineOptions()) {
                     }
                 }
                 ctx.fold.clear()
-                ctx.nucKey = if (out.nucleus.isEmpty()) 0 else RimeMap.rimeKey(out.nucleus)
+                ctx.nucKey = if (rimeString(out).isEmpty()) 0 else RimeMap.rimeKey(rimeString(out))
                 ctx.rimeKey = ctx.nucKey
                 ctx.justUntoggled = true
                 return pos + 1
@@ -535,11 +565,11 @@ class VietnameseComposer(var options: EngineOptions = EngineOptions()) {
              * (tone, vowel, coda); its pivot 'w' folds via its own slot, and
              * an invalid follower keeps the parked form literal. No flags.
              */
-            val plainNuc = out.nucleus.toStringVal()
+            val plainNuc = rimeString(out).toString()
             val foldIdx = applyFoldRules(c, ctx.nucKey, pos, raw, out)
             if (foldIdx >= 0) {
                 ctx.fold.set(cLow, pos, plainNucleus = plainNuc)
-                ctx.nucKey = RimeMap.rimeKey(out.nucleus)
+                ctx.nucKey = RimeMap.rimeKey(rimeString(out))
                 ctx.rimeKey = RimeMap.extendKey(ctx.nucKey, out.coda, 0, out.coda.length)
                 ctx.justUntoggled = false
                 return pos + 1
@@ -553,21 +583,25 @@ class VietnameseComposer(var options: EngineOptions = EngineOptions()) {
              * (taata) re-presses are handled by the untoggle path above.
              */
             if (!ctx.syllableLocked && ctx.fold.active && cLow == ctx.fold.key &&
-                !out.nucleus.contentEquals(ctx.fold.plainNucleus)) {
-                out.nucleus.setTo(untoggleCore(out.nucleus.toStringVal()))
+                !rimeString(out).contentEquals(ctx.fold.plainNucleus)) {
+                out.nucleus.setTo(untoggleCore(rimeString(out).toString()))
+                // untoggleCore returns the whole rime (glide included) — the
+                // turn the glide back into the core, so semiCoda is now stale.
+                out.semiCoda.clear()
                 out.rawSuffix.append(c)
                 ctx.syllableLocked = true
                 ctx.fold.clear()
-                ctx.nucKey = if (out.nucleus.isEmpty()) 0 else RimeMap.rimeKey(out.nucleus)
+                ctx.nucKey = if (rimeString(out).isEmpty()) 0 else RimeMap.rimeKey(rimeString(out))
                 ctx.rimeKey = ctx.nucKey
                 ctx.justUntoggled = true
                 return pos + 1
             }
         }
         if (!ctx.syllableLocked && out.nucleus.isNotEmpty() && cLow != 'w') {
-            val combo = RimeMap.combineNucleus(out.nucleus, c)
+            val combo = RimeMap.combineNucleus(rimeString(out), c)
             if (combo != null) {
                 out.nucleus.setTo(combo)
+                out.semiCoda.clear()
                 ctx.nucKey = RimeMap.rimeKey(out.nucleus)
                 ctx.rimeKey = RimeMap.extendKey(ctx.nucKey, out.coda, 0, out.coda.length)
                 return pos + 1
@@ -596,6 +630,20 @@ class VietnameseComposer(var options: EngineOptions = EngineOptions()) {
     }
 
     /** Plain vowel → start a nucleus or extend it; false falls through to literal. */
+    /** Fresh full-]rime buffer for [rimeString]. */
+    private val fullRimeBuf = StringBuilder(16)
+
+    /**
+     * The rime as one unit — [SyllableState.nucleus] + [SyllableState.semiCoda]
+     * — for the kernel code that still reasons about the whole rime (fold /
+     * combine / untoggle).  Zero-alloc concrete view over the two buffers.
+     */
+    private fun rimeString(out: SyllableState): CharSequence {
+        fullRimeBuf.setLength(0)
+        fullRimeBuf.append(out.nucleus).append(out.semiCoda)
+        return fullRimeBuf
+    }
+
     private fun tryPlainVowel(c: Char, out: SyllableState, ctx: ScanCtx): Boolean {
         if (out.nucleus.isEmpty()) {
             if (out.onset.isNotEmpty()) {
@@ -614,7 +662,15 @@ class VietnameseComposer(var options: EngineOptions = EngineOptions()) {
             val candidateKey = RimeMap.extendKeySingle(ctx.nucKey, c)
             if (RimeMap.isValidPrefix(candidateKey)) {
                 resolveAliasNucleus(out)
-                out.nucleus.append(c)
+                if (out.semiCoda.isEmpty() && RimeMap.isClosingGlide(c) &&
+                    RimeMap.isGlideFinalRime(candidateKey)
+                ) {
+                    // A closing semivowel (bán âm cuối) closes a codaless rime:
+                    // route it straight into semiCoda instead of the core.
+                    out.semiCoda.append(c)
+                } else {
+                    out.nucleus.append(c)
+                }
                 ctx.nucKey = RimeMap.effectiveNucleusKey(candidateKey, out.nucleus)
                 ctx.rimeKey = ctx.nucKey
                 return true
@@ -664,9 +720,9 @@ class VietnameseComposer(var options: EngineOptions = EngineOptions()) {
      * (untoggle anchor), or -1 when no fold applies.
      */
     private fun applyFoldRules(c: Char, nucKey: Int, rawPos: Int, raw: CharSequence, out: SyllableState): Int {
-        // OwnedBuffer is a CharSequence: the fold overloads below read it in
-        // place, so no snapshot String is allocated on the fold path.
-        val nuc = out.nucleus
+        // The whole rime (core + trailing glide) folds as one unit, as though
+        // the glide still sat in the nucleus; a successful fold absorbs it.
+        val nuc = rimeString(out)
         val slot = RimeMap.foldSlotForDisplay(nucKey, nuc)
         if (slot < 0) return -1
         val primary = RimeMap.foldPrimaryAtSlot(slot, c)
@@ -682,6 +738,7 @@ class VietnameseComposer(var options: EngineOptions = EngineOptions()) {
             }
             if (!ok) return -1
             out.nucleus.setTo(newNuc)
+            out.semiCoda.clear()
             return RimeMap.foldPos(primary)
         }
 
@@ -702,6 +759,7 @@ class VietnameseComposer(var options: EngineOptions = EngineOptions()) {
         }
         if (chosen == null) return -1
         out.nucleus.setTo(chosen)
+        out.semiCoda.clear()
         return RimeMap.foldPos(primary)
     }
 

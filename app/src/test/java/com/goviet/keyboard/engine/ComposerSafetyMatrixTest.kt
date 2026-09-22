@@ -136,13 +136,15 @@ class ComposerSafetyMatrixTest {
     fun closingGlideRimes() {
         assertEquals("lưu", engine.process("luwu"))
         assertEquals("cửu", engine.process("cuwur"))
-        assertEquals("sáu", engine.process("saau"))
+        assertEquals("sáu", engine.process("sasu"))
+        assertEquals("sâu", engine.process("saau"))
         assertEquals("cao", engine.process("cao"))
         assertEquals("rau", engine.process("rau"))
         assertEquals("mai", engine.process("mai"))
-        assertEquals("thầy", engine.process("thaay"))
+        assertEquals("thầy", engine.process("thaayf"))
+        assertEquals("thây", engine.process("thaay"))
         assertEquals("chịu", engine.process("chiuj"))
-        assertEquals("lều", engine.process("leefuf"))
+        assertEquals("lều", engine.process("leeuf"))
     }
 
     // ── 3. gi / qu / uo families ───────────────────────────────────────────

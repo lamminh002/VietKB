@@ -69,6 +69,14 @@ object RimeMap {
         arr['w'.code] = W_INDEX
     }
 
+    /** Closing semivowels (bán âm cuối): i, y, u, o. A glide closes the rime —
+     *  glide-final nuclei take no coda (all C_NONE below); tones and folds
+     *  address the core through the transparent glide. */
+    val CLOSING_GLIDES = "iyuo"
+    private val CLOSING_GLIDE_SET = BooleanArray(512).also { arr ->
+        for (c in CLOSING_GLIDES) arr[c.code] = true
+    }
+
     /** Encode one Vietnamese rime character to its 5-bit index. */
     @JvmStatic
     fun charIndex(c: Char): Int {
@@ -208,7 +216,9 @@ object RimeMap {
         for (spec in _nuclei) {
             allRimes.add(spec.nucleus)
             val nucKey = rimeKey(spec.nucleus)
-            val slot = table.insert(nucKey, packData(1, 1, 0, spec.tnNew, spec.tnOld))
+            val glideFinal = if (spec.codas.isEmpty() && spec.nucleus.length >= 2 &&
+                isClosingGlide(spec.nucleus[spec.nucleus.length - 1])) 1 else 0
+            val slot = table.insert(nucKey, packData(1, 1, 0, spec.tnNew, spec.tnOld, glideFinal))
             val w = computeFoldW(spec.nucleus)
             val wPrimary = (w and 0xFFFF).toInt()
             val wAlt = ((w ushr 16) and 0xFFFF).toInt()
@@ -253,13 +263,15 @@ object RimeMap {
         }
     }
 
-    /** Pack metadata into a single Int (stored as Byte in table). */
+    /** Pack metadata into a single Int (stored as Byte in table).  Bit 7 flags a
+     *  glide-final rime (closing semivowel i/y/u/o and no coda) — the value can
+     *  go negative through the byte, so every reader masks by 0xFF. */
     private fun packData(
         isPrefix: Int, isComplete: Int, isStop: Int,
-        tnNew: Int, tnOld: Int
+        tnNew: Int, tnOld: Int, glideFinal: Int = 0
     ): Int {
         return isPrefix or (isComplete shl 1) or (isStop shl 2) or
-                (tnNew shl 3) or (tnOld shl 5)
+                (tnNew shl 3) or (tnOld shl 5) or (glideFinal shl 7)
     }
 
     private fun combineInsert(nucLower: String, charLower: Char, result: String) {
@@ -303,23 +315,29 @@ object RimeMap {
     @JvmStatic
     fun isComplete(key: Int): Boolean {
         val i = table.find(key)
-        return i >= 0 && (table.data[i].toInt() and 2) != 0
+        return i >= 0 && (table.data[i].toInt() and 0xFF and 2) != 0
     }
 
     @JvmStatic
     fun isStop(key: Int): Boolean {
         val i = table.find(key)
-        return i >= 0 && (table.data[i].toInt() and 4) != 0
+        return i >= 0 && (table.data[i].toInt() and 0xFF and 4) != 0
+    }
+
+    @JvmStatic
+    fun isGlideFinalRime(key: Int): Boolean {
+        val i = table.find(key)
+        return i >= 0 && (table.data[i].toInt() and 0xFF and 0x80) != 0
     }
 
     @JvmStatic
     fun indexOf(key: Int): Int = table.find(key)
 
     @JvmStatic
-    fun toneNewAt(idx: Int): Int = (table.data[idx].toInt() ushr 3) and 3
+    fun toneNewAt(idx: Int): Int = ((table.data[idx].toInt() and 0xFF) ushr 3) and 3
 
     @JvmStatic
-    fun toneOldAt(idx: Int): Int = (table.data[idx].toInt() ushr 5) and 3
+    fun toneOldAt(idx: Int): Int = ((table.data[idx].toInt() and 0xFF) ushr 5) and 3
 
     /**
      * Single-lookup check whether [key] is a valid prefix AND accepts [tone] —
@@ -330,7 +348,7 @@ object RimeMap {
     fun isValidPrefixWithTone(key: Int, tone: Int): Boolean {
         val i = table.find(key)
         if (i < 0) return false
-        val d = table.data[i].toInt()
+        val d = table.data[i].toInt() and 0xFF
         if (tone == 0) return true
         if ((d and 4) == 0) return true
         return tone == 1 || tone == 5
@@ -646,14 +664,6 @@ object RimeMap {
         for (c in VOWEL_MOD_KEYS) arr[c.code] = true
     }
 
-    /** Closing semivowels (bán âm cuối): i, y, u, o. A glide closes the rime —
-     *  glide-final nuclei take no coda (all C_NONE below); tones and folds
-     *  address the core through the transparent glide. */
-    val CLOSING_GLIDES = "iyuo"
-    private val CLOSING_GLIDE_SET = BooleanArray(512).also { arr ->
-        for (c in CLOSING_GLIDES) arr[c.code] = true
-    }
-
     /** Valid Vietnamese coda strings. */
     val CODAS = arrayOf("ng", "nh", "ch", "m", "p", "n", "t", "c")
 
@@ -711,7 +721,7 @@ object RimeMap {
     @JvmStatic
     fun determineTonePosition(rimeKey: Int, oldTonePlacement: Boolean, nucleusLength: Int = 0): Int {
         val i = indexOf(rimeKey)
-        if (i < 0 || (table.data[i].toInt() and 2) == 0) return (nucleusLength - 1).coerceAtLeast(0)
+        if (i < 0 || (table.data[i].toInt() and 0xFF and 2) == 0) return (nucleusLength - 1).coerceAtLeast(0)
         return if (oldTonePlacement) toneOldAt(i) else toneNewAt(i)
     }
 
