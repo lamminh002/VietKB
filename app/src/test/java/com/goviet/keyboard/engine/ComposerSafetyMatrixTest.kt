@@ -121,11 +121,12 @@ class ComposerSafetyMatrixTest {
     }
 
     // ── 2c. Same-key re-press across an intervening vowel ───────────────────
-    // The second w folds nothing new (ư is terminal for w), so it dissolves
-    // the recorded fold in place instead of going literal: uwuw → uuw.
+    // A trailing u/i after ư is a closing semivowel: the second w folds
+    // nothing new, so it untoggles the ư core and keeps the glide.
     @Test
     fun foldDissolution_acrossInterveningVowel() {
         assertEquals("uuw", engine.process("uwuw"))
+        assertEquals("uiw", engine.process("uwiw"))
     }
 
     // ── 3. gi / qu / uo families ───────────────────────────────────────────

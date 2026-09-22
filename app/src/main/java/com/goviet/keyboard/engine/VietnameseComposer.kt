@@ -445,6 +445,23 @@ class VietnameseComposer(var options: EngineOptions = EngineOptions()) {
     }
 
     /**
+     * Untoggles the nucleus core for a same-key re-press. A trailing u/i
+     * after ư is a closing semivowel, transparent to the fold key: only the
+     * last folded char — the recorded fold's own target — reverts to its
+     * plain base, the glide stays untouched (ưu → uu, ưi → ui).
+     */
+    private fun untoggleCore(nuc: String): String {
+        var core = -1
+        for (i in nuc.indices) {
+            if (RimeMap.plainOf(nuc[i]) != nuc[i]) core = i
+        }
+        if (core < 0) return nuc
+        val sb = StringBuilder(nuc)
+        sb.setCharAt(core, RimeMap.plainOf(nuc[core]))
+        return sb.toString()
+    }
+
+    /**
      * 'w'-key handler — w-special rules live here (standalone w → ư when directW
      * is off); a repeated 'w' after an applied fold falls through to the shared
      * untoggle path (like d→đ and the tone keys), releasing the fold and letting
@@ -528,16 +545,16 @@ class VietnameseComposer(var options: EngineOptions = EngineOptions()) {
                 return pos + 1
             }
             /*
-             * Same-key re-press that folds nothing new: the key cannot
-             * transform this nucleus any further (ư is terminal for w), so
-             * instead of going literal it dissolves the recorded fold in
-             * place — unfold the nucleus, let the key out as literal text
-             * and lock: uwuw → uuw. The adjacent (taaa) and closed-coda
+             * Same-key re-press that folds nothing new: a trailing u/i
+             * after ư is a closing semivowel, transparent to the fold key,
+             * so the key addresses the ư core — untoggle just the core,
+             * keep the glide, let the key out as literal text and lock:
+             * uwuw → uuw, uwiw → uiw. The adjacent (taaa) and closed-coda
              * (taata) re-presses are handled by the untoggle path above.
              */
             if (!ctx.syllableLocked && ctx.fold.active && cLow == ctx.fold.key &&
                 !out.nucleus.contentEquals(ctx.fold.plainNucleus)) {
-                out.nucleus.setTo(unfoldToBase(out.nucleus.toStringVal()))
+                out.nucleus.setTo(untoggleCore(out.nucleus.toStringVal()))
                 out.rawSuffix.append(c)
                 ctx.syllableLocked = true
                 ctx.fold.clear()
