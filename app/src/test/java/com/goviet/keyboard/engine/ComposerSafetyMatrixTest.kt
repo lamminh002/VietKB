@@ -98,6 +98,28 @@ class ComposerSafetyMatrixTest {
         assertEquals("dd", engine.process("ddd"))
     }
 
+    // ── 2b. Fold dissolution after a closed coda (tiêu biến) ──────────────
+    // Free-typing rule: re-pressing the fold key after the coda has closed
+    // dissolves the fold so the whole buffer re-reads plainly — taata → tata,
+    // loongo → longo, leenhe → lenhe, same rule as uowngw → uongw.
+    @Test
+    fun foldDissolution_withClosedCoda() {
+        assertEquals("tata", engine.process("taata"))
+        assertEquals("longo", engine.process("loongo"))
+        assertEquals("lenhe", engine.process("leenhe"))
+        assertEquals("lenhe", engine.process("lenhee"))
+        assertEquals("uongw", engine.process("uowngw"))
+    }
+
+    @Test
+    fun foldDissolution_onlyTheFoldKeyItselfDissolves() {
+        // A different vowel after the closed coda keeps the fold (lônga).
+        assertEquals("lônga", engine.process("loonga"))
+        // No prior fold → deferred fold still applies (lenhe → lênh, Bug 5).
+        assertEquals("lênh", engine.process("lenhe"))
+        assertEquals("chêch", engine.process("cheche"))
+    }
+
     // ── 3. gi / qu / uo families ───────────────────────────────────────────
     @Test
     fun giOnsetMatrix() {
@@ -208,11 +230,11 @@ class ComposerSafetyMatrixTest {
     fun backspaceForeignWord_locksLiteral() {
         engine.reset()
         type("deepseel")
-        assertEquals("dếpeel", engine.toDisplayString())
-        // Survivor "dếpee" cannot round-trip → literal lock, never re-Telexed.
-        assertEquals("dếpee", engine.backspace())
+        assertEquals("dépeel", engine.toDisplayString())
+        // Survivor "dépee" cannot round-trip → literal lock, never re-Telexed.
+        assertEquals("dépee", engine.backspace())
         assertFalse(engine.composeAsVietnamese)
-        assertEquals("dếpeek", engine.processKey('k').text.toString())
+        assertEquals("dépeek", engine.processKey('k').text.toString())
     }
 
     // ── 6. Emoji / ZWJ / flag: adoption fails, typing stays literal ────────

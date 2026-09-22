@@ -483,9 +483,15 @@ class VietnameseComposer(var options: EngineOptions = EngineOptions()) {
      */
     private fun handleModifierKey(raw: CharSequence, c: Char, cLow: Char, pos: Int, out: SyllableState, ctx: ScanCtx): Int {
         if (!ctx.syllableLocked && out.nucleus.isNotEmpty() && !ctx.justUntoggled) {
+            // Re-pressing the fold key untoggles the fold. An adjacent press
+            // (taaa → taa) untoggles anywhere; a later press after a coda is
+            // already closed dissolves the fold so free-typing re-reads the
+            // syllable plainly (taata → tata, loongo → longo, leenhe → lenhe),
+            // the same rule as uowngw → uongw. The tone is a separate axis:
+            // it survives on the unfolded base (deepseel → "dépeel").
             if (ctx.fold.active && cLow == ctx.fold.key &&
                 (pos == ctx.fold.rawPos + 1 ||
-                    (cLow == 'w' && out.coda.isNotEmpty() && pos > ctx.fold.rawPos)) &&
+                    (out.coda.isNotEmpty() && pos > ctx.fold.rawPos)) &&
                 !out.nucleus.contentEquals(ctx.fold.plainNucleus)) {
                 if (ctx.fold.standalone) {
                     out.nucleus.clear()

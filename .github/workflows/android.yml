@@ -64,6 +64,15 @@ jobs:
       run: |
         ./gradlew testDebugUnitTest --stacktrace
 
+    - name: Upload Unit Test Reports
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: test-reports
+        path: |
+          app/build/test-results/testDebugUnitTest/*.xml
+          app/build/reports/tests/testDebugUnitTest
+
     - name: Build Release APK
       run: |
         ./gradlew assembleRelease -Pandroid.builder.sdkDownload=true --stacktrace
