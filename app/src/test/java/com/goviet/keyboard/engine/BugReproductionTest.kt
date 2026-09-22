@@ -161,7 +161,7 @@ class BugReproductionTest {
 
     @Test
     fun testBug5_lenhes_shouldBe_lenh_with_tone() {
-        // lenhe + s = lếnh (s = sắc tone applied after fold)
+        // lenhe + s = lếnh (s = acute tone applied after fold)
         assertEquals("lếnh", engine.process("lenhes"))
         assertEquals("lềnh", engine.process("lenhef"))
     }
@@ -188,14 +188,14 @@ class BugReproductionTest {
 
     @Test
     fun testBug5_chechse_shouldBe_chech() {
-        // ch is valid coda for 'e'; tone 's' applies sắc; fold 'e'→ê → chếch
+        // ch is valid coda for 'e'; tone 's' applies acute; fold 'e'→ê → chếch
         assertEquals("chếch", engine.process("chechse"))
     }
 
 
     @Test
     fun testBug5_chechs_shouldBe_chech_with_sac() {
-        // ch + e + c + h: 'ch' coda now valid for 'e' (C_ALL), 's' applies sắc
+        // ch + e + c + h: 'ch' coda now valid for 'e' (C_ALL), 's' applies acute
         assertEquals("chéch", engine.process("chechs"))
     }
 

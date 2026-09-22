@@ -98,7 +98,7 @@ class ComposerSafetyMatrixTest {
         assertEquals("dd", engine.process("ddd"))
     }
 
-    // ── 2b. Fold dissolution after a closed coda (tiêu biến) ──────────────
+    // ── 2b. Fold dissolution after a closed coda ───────────────────────────
     // Free-typing rule: re-pressing the fold key after the coda has closed
     // dissolves the fold so the whole buffer re-reads plainly — taata → tata,
     // loongo → longo, leenhe → lenhe, same rule as uowngw → uongw.
@@ -129,7 +129,7 @@ class ComposerSafetyMatrixTest {
         assertEquals("uiw", engine.process("uwiw"))
     }
 
-    // ── 2d. Closing-glide rimes (bán âm cuối i/y/u/o) ───────────────────────
+    // ── 2d. Closing-glide rimes (closing semivowels i/y/u/o) ──────────────
     // Glide-final rimes take no coda; folds and tones address the core
     // through the transparent glide.
     @Test

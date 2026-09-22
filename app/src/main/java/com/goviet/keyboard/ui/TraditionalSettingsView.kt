@@ -231,7 +231,7 @@ open class TraditionalSettingsView @JvmOverloads constructor(
         val mainTop = padding + headerHeight
         val usableWidth = width - padding * 2
 
-        // Row 1: 3 cards for Appearance/Style (Kiểu phím, Giao diện, Cạnh dưới)
+        // Row 1: 3 cards for Appearance/Style (Key Style, Interface, Bottom Edge)
         val colWidth3 = (usableWidth - itemSpacing * 2) / 3f
         val cellHeight = 72f * density
 
@@ -240,7 +240,7 @@ open class TraditionalSettingsView @JvmOverloads constructor(
             catCardRects[i].set(left, mainTop, left + colWidth3, mainTop + cellHeight)
         }
 
-        // Row 2: 2 cards for Fast 1-Tap Toggles (Gõ tắt, Viết hoa đầu câu)
+        // Row 2: 2 cards for Fast 1-Tap Toggles (Quick Type, Auto-capitalize)
         val colWidth2 = (usableWidth - itemSpacing) / 2f
         val row2Top = mainTop + cellHeight + itemSpacing
         for (i in 3..4) {

@@ -119,7 +119,7 @@ class UoCompoundTest {
 
     @Test
     fun aliasParked_toneKeyResolvesAlias() {
-        // 'x' is ngã — a tone key resolves the parked alias (like duwoj).
+        // 'x' is the tilde tone key — it resolves the parked alias (like duwoj).
         assertEquals("dưỡ", engine.process("duwox"))
     }
 

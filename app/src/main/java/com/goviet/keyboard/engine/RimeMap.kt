@@ -69,7 +69,7 @@ object RimeMap {
         arr['w'.code] = W_INDEX
     }
 
-    /** Closing semivowels (bán âm cuối): i, y, u, o. A glide closes the rime —
+    /** Closing semivowels (i, y, u, o). A glide closes the rime —
      *  glide-final nuclei take no coda (all C_NONE below); tones and folds
      *  address the core through the transparent glide. */
     val CLOSING_GLIDES = "iyuo"
@@ -180,8 +180,9 @@ object RimeMap {
 
             NucSpec("uye", C_UYE,  2),    NucSpec("uyê", C_UYE, 2),
 
-            // Closing-glide (bán âm cuối i/y/u/o) rimes: the glide closes the
-            // rime, so C_NONE throughout — extension/tone math runs on the core.
+            // Closing-glide rimes (closing semivowels i/y/u/o): the glide closes
+            // the rime, so C_NONE throughout — extension/tone math runs
+            // on the core.
             NucSpec("ai",  C_NONE, 0), NucSpec("ao",  C_NONE, 0),
             NucSpec("au",  C_NONE, 0), NucSpec("ay",  C_NONE, 0),
             NucSpec("âu",  C_NONE, 0), NucSpec("ây",  C_NONE, 0),
@@ -341,8 +342,8 @@ object RimeMap {
 
     /**
      * Single-lookup check whether [key] is a valid prefix AND accepts [tone] —
-     * one table probe.  Stop codas (c, ch, p, t) only allow acute (sắc, 1) and
-     * dot (nặng, 5); NONE (0) is always allowed.
+     * one table probe.  Stop codas (c, ch, p, t) only allow the acute and dot
+     * tones (1 and 5); NONE (0) is always allowed.
      */
     @JvmStatic
     fun isValidPrefixWithTone(key: Int, tone: Int): Boolean {
@@ -688,7 +689,7 @@ object RimeMap {
         return code in 0 until 512 && VOWEL_MOD_SET[code]
     }
 
-    /** Closing-glide (bán âm cuối i/y/u/o) letter — O(1) BooleanArray lookup. */
+    /** Closing-glide (i/y/u/o) letter — O(1) BooleanArray lookup. */
     @JvmStatic
     fun isClosingGlide(c: Char): Boolean {
         val code = c.lowercaseChar().code

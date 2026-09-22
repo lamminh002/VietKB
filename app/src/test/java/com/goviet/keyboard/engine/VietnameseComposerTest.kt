@@ -131,13 +131,13 @@ class VietnameseComposerTest {
         // banaa -> bana
         assertEquals("bana", engine.process("banaa"))
 
-        // banaan -> banan (fold key nhả literal khi đã có âm cuối)
+        // banaan -> banan (the duplicate fold key releases as literal once a coda exists)
         assertEquals("banan", engine.process("banaan"))
 
-        // Cách gõ đúng "banana": b a n a a n a (fold rồi hủy rồi gõ tiếp)
+        // Correct typing of "banana": b a n a a n a (fold then undo-fold then keep typing)
         assertEquals("banana", engine.process("banaana"))
 
-        // Gõ sai cách b a n a n a: không hủy fold -> bânna (không phải banana)
+        // Wrong typing b a n a n a: no undo-fold -> "bânna" (not "banana")
         assertEquals("bânna", engine.process("banana"))
     }
 
@@ -147,7 +147,7 @@ class VietnameseComposerTest {
         assertEquals("sốc", engine.process("soocs"))
         assertEquals("sộc", engine.process("soocj"))
 
-        // ooo -> oo (hủy biến đổi)
+        // ooo -> oo (fold undone)
         assertEquals("coo", engine.process("cooo"))
         assertEquals("cooo", engine.process("coooo"))
     }
@@ -330,8 +330,9 @@ class VietnameseComposerTest {
 
     @Test
     fun testSecondWAfterUoCompoundIsLiteral() {
-        // u o w -> uơ (fold), u o w w -> uow: phím w thứ 2 (liền kề sau fold)
-        // hủy fold và thả ra làm literal text — đồng bộ với d→đ / phím dấu.
+        // u o w -> uơ (fold), u o w w -> uow: the second 'w' (immediately after the
+        // fold) undoes the fold and lets the key out as literal text — consistent
+        // with d→đ / the tone keys.
         assertEquals("hướng", engine.process("huowngs"))
         assertEquals("uow", engine.process("uoww"))
         assertEquals("thuow", engine.process("thuoww"))
@@ -341,13 +342,13 @@ class VietnameseComposerTest {
 
     @Test
     fun testDoubleWUntoggleUaFamilyAndHuawei() {
-        // h u a w w e i -> huawei: phím w thứ 2 sau ưa/oă hủy fold và thả w ra literal.
+        // h u a w w e i -> huawei: the second 'w' after ưa/oă undoes the fold and releases 'w' as literal.
         assertEquals("huawei", engine.process("huawwei"))
         assertEquals("muaw", engine.process("muaww"))
         assertEquals("chuaw", engine.process("chuaww"))
         assertEquals("hoaw", engine.process("hoaww"))
         assertEquals("đuaw", engine.process("dduaww"))
-        // Nhánh uo (uơ/ươ): phím w thứ 2 liền kề hủy fold và thả literal (uoww -> uow).
+        // The uo branch (uơ/ươ): an immediately following second 'w' undoes the fold and releases literal (uoww -> uow).
         assertEquals("uow", engine.process("uoww"))
         assertEquals("thuow", engine.process("thuoww"))
         assertEquals("buow", engine.process("buoww"))
@@ -356,8 +357,8 @@ class VietnameseComposerTest {
 
     @Test
     fun testSylPackKeyGuards() {
-        // Chuỗi > 10 ký tự và chuỗi rỗng phải bị chặn rõ ràng
-        // (không để phép dịch bit âm / sentinel 0L ghi nhầm dữ liệu).
+        // Strings over 10 characters and empty strings must be clearly rejected
+        // (so negative bit-shifts / the 0L sentinel can never write bad data).
         assertTrue(RimeMap.isSyllablePrefixValid("nghieng"))
         assertFalse(RimeMap.isSyllablePrefixValid("restaurant"))
         assertFalse(RimeMap.isSyllablePrefixValid("particularly"))
@@ -449,11 +450,12 @@ class VietnameseComposerTest {
 
     @Test
     fun testTonePositionTracksFinalRime() {
-        // c h u r a n a -> chuẩn: khi vần còn "ua" + n (phụ âm chưa hợp lệ,
-        // cần fold 'a' để thành uân), dấu hỏi phải nằm trên chữ a chứ không
-        // nhảy về u.  Đồng thời cho phép gõ dấu sau âm cuối: chuanra -> chuẩn.
+        // c h u r a n a -> chuẩn: while the rime is still "ua" + n (consonant not yet
+        // valid, so 'a' must fold to form uân), the hook tone must sit on the 'a',
+        // not jump back to 'u'. Tone keys are also allowed after the coda:
+        // chuanra -> chuẩn.
         assertEquals("chủ", engine.process("chur"))
-        // ua + hỏi -> dấu trên u là đúng tiếng Việt (chùa, của, chủa).
+        // ua + hook -> the mark on 'u' is correct Vietnamese (chùa, của, chủa).
         assertEquals("chủa", engine.process("chura"))
         assertEquals("chuản", engine.process("churan"))
         assertEquals("chuẩn", engine.process("churana"))
@@ -461,7 +463,7 @@ class VietnameseComposerTest {
         assertEquals("chuẩn", engine.process("chuanra"))
         assertEquals("chùa", engine.process("chuaf"))
 
-        // cooosng: dấu sắc luôn nằm trên o thứ 2 (coón khi gõ n, coóng khi gõ g).
+        // cooosng: the acute always lands on the second 'o' (coón when n is typed, coóng when g is typed).
         assertEquals("coó", engine.process("cooos"))
         assertEquals("coón", engine.process("cooosn"))
         assertEquals("coóng", engine.process("cooosng"))
@@ -599,23 +601,23 @@ class VietnameseComposerTest {
 
     @Test
     fun testNoRollbackToRawWhenTransformed() {
-        // Hủy dấu thanh xuất phím thô:
+        // Undoing a tone releases the raw key:
         assertEquals("tối", engine.process("toois"))
         assertEquals("tôis", engine.process("tooiss"))
-        // Quá trình composition từng phím:
+        // Per-keystroke composition:
         engine.reset()
         assertEquals("t", engine.processKey('t').text)
         assertEquals("to", engine.processKey('o').text)
         assertEquals("tô", engine.processKey('o').text)
         assertEquals("tôi", engine.processKey('i').text)
         assertEquals("tối", engine.processKey('s').text)
-        // Bấm s lần nữa -> hủy dấu sắc, trả về 'tôis'
+        // Pressing 's' again undoes the acute, returning 'tôis'
         assertEquals("tôis", engine.processKey('s').text)
 
         engine.reset()
         assertEquals("ư", engine.processKey('w').text) // w -> ư
         assertEquals("ứ", engine.processKey('s').text)
-        // Bấm s lần nữa -> hủy dấu sắc, trả về 'ưs'
+        // Pressing 's' again undoes the acute, returning 'ưs'
         assertEquals("ưs", engine.processKey('s').text)
 
         engine.reset()
@@ -654,7 +656,7 @@ class VietnameseComposerTest {
 
     @Test
     fun testDoongAndSoocAndCoong() {
-        // d d o o o -> đoo (hủy ô -> oo giữ nguyên đ)
+        // d d o o o -> đoo (undo ô -> oo, keep the đ)
         assertEquals("đoo", engine.process("ddooo"))
         assertEquals("đoong", engine.process("ddooong"))
         assertEquals("đoòng", engine.process("ddooongf"))
@@ -701,17 +703,17 @@ class VietnameseComposerTest {
 
     @Test
     fun testPreserveComposedVietnameseOnInvalidFollowUpKeys() {
-        // t h u w a e -> thưa + e = thưae (không bị lùi về raw text thuwae)
+        // t h u w a e -> thưa + e = thưae (must not fall back to raw text thuwae)
         assertEquals("thưa", engine.process("thuwa"))
         assertEquals("thưae", engine.process("thuwae"))
         assertEquals("thưaeo", engine.process("thuwaeo"))
 
-        // y r i -> ỷ + i = ỷi (không bị lùi về yri)
+        // y r i -> ỷ + i = ỷi (must not fall back to yri)
         assertEquals("ỷ", engine.process("yr"))
         assertEquals("ỷi", engine.process("yri"))
         assertEquals("ỷia", engine.process("yria"))
 
-        // Các từ tiếng Việt khác khi gõ thêm ký tự không hợp lệ
+        // Other Vietnamese words with a trailing invalid character are kept composed
         assertEquals("học", engine.process("hocj"))
         assertEquals("họct", engine.process("hocjt"))
         assertEquals("toán", engine.process("toans"))
@@ -720,13 +722,13 @@ class VietnameseComposerTest {
         assertEquals("ngườip", engine.process("nguoiwfp"))
         assertEquals("đoàn", engine.process("ddoanf"))
         assertEquals("đoànk", engine.process("ddoanfk"))
-        // Gõ phím dấu thanh thay thế: ddoanf + x -> đoãn
+        // Replacing tone key: ddoanf + x -> đoãn
         assertEquals("đoãn", engine.process("ddoanfx"))
     }
 
     @Test
     fun testIncrementalTypingWithUserReportedCases() {
-        // Gõ từng phím: t -> h -> u -> w -> a -> e
+        // Type each key: t -> h -> u -> w -> a -> e
         engine.reset()
         assertEquals("t", engine.processKey('t').text)
         assertEquals("th", engine.processKey('h').text)
@@ -735,25 +737,25 @@ class VietnameseComposerTest {
         assertEquals("thưa", engine.processKey('a').text)
         assertEquals("thưae", engine.processKey('e').text)
 
-        // Gõ từng phím: y -> r -> i
+        // Type each key: y -> r -> i
         engine.reset()
         assertEquals("y", engine.processKey('y').text)
         assertEquals("ỷ", engine.processKey('r').text)
         assertEquals("ỷi", engine.processKey('i').text)
 
-        // Gõ t h a y a -> thây, t h a y a s -> thấy
+        // Type t h a y a -> thây, t h a y a s -> thấy
         engine.reset()
         assertEquals("thay", engine.process("thay"))
         assertEquals("thây", engine.process("thaya"))
         assertEquals("thấy", engine.process("thayas"))
 
-        // Gõ t h o i o -> thôi, t h o i o s -> thối
+        // Type t h o i o -> thôi, t h o i o s -> thối
         engine.reset()
         assertEquals("thoi", engine.process("thoi"))
         assertEquals("thôi", engine.process("thoio"))
         assertEquals("thối", engine.process("thoios"))
 
-        // Gõ a y a s -> ayas (v-c-v dừng biến đổi, không biến thành ayá)
+        // Type a y a s -> ayas (v-c-v stops transforming, must not become ayá)
         engine.reset()
         assertEquals("ay", engine.process("ay"))
         assertEquals("ây", engine.process("aya"))
@@ -769,40 +771,40 @@ class VietnameseComposerTest {
 
     @Test
     fun testVietnameseTransformationSpecificationRequirements() {
-        // Yêu cầu 17.1: dung + f -> dùng (u = tiền nguyên âm, ng = âm cuối hợp lệ)
+        // Requirement 17.1: dung + f -> dùng (u = leading vowel, ng = valid coda)
         assertEquals("dùng", engine.process("dungf"))
 
-        // Yêu cầu 17.2: dung + w -> dưng
+        // Requirement 17.2: dung + w -> dưng
         assertEquals("dưng", engine.process("dungw"))
 
-        // Yêu cầu 17.3: tieng (t + iê + ng) + f -> tiềng (trong quy ước gõ Telex: tieengf -> tiềng, tiengs -> tiéng/tiếng)
+        // Requirement 17.3: tieng (t + iê + ng) + f -> tiềng (in the Telex convention: tieengf -> tiềng, tiengs -> tiéng/tiếng)
         assertEquals("tiềng", engine.process("tieengf"))
         assertEquals("tiếng", engine.process("tieengs"))
 
-        // Yêu cầu 17.4: Tiền nguyên âm + phụ âm không hợp lệ + phím biến đổi -> không biến đổi, giữ nguyên
-        // Ví dụ: du + k + f -> dukf (k không phải âm cuối hợp lệ của du, f giữ nguyên không quay về u)
+        // Requirement 17.4: leading vowel + invalid consonant + fold key -> no transform, keep as-is
+        // Example: du + k + f -> dukf (k is not a valid coda of du, f stays put and does not revert to u)
         assertEquals("dukf", engine.process("dukf"))
         assertEquals("batkf", engine.process("batkf"))
 
-        // Yêu cầu 17.5: [nguyên âm cũ] + [âm cuối] + [nguyên âm mới không phải biến đổi] + phím biến đổi -> không xuyên qua nguyên âm mới
-        // Ví dụ: dung + a + f -> dungaf (không biến thành dũnga hoặc dùnga)
+        // Requirement 17.5: [old vowel] + [coda] + [new non-fold vowel] + fold key -> does not reach through the new vowel
+        // Example: dung + a + f -> dungaf (must not become dũnga or dùnga)
         assertEquals("dungaf", engine.process("dungaf"))
         assertEquals("dungof", engine.process("dungof"))
         assertEquals("tiềng", engine.process("tiengef"))
 
-        // Cụm âm cuối nhiều ký tự: ng, nh, ch
+        // Multi-char codas: ng, nh, ch
         assertEquals("đoàng", engine.process("ddoangf"))
         assertEquals("bánh", engine.process("banhs"))
         assertEquals("sách", engine.process("sachs"))
         assertEquals("mạch", engine.process("machj"))
 
-        // Cụm nguyên âm dài nhất: iêng, uông, ươn, uyên
+        // Longest vowel clusters: iêng, uông, ươn, uyên
         assertEquals("uống", engine.process("uoongs"))
         assertEquals("tiếng", engine.process("tieengs"))
         assertEquals("lượn", engine.process("luonwj"))
         assertEquals("thuyền", engine.process("thuyeenf"))
 
-        // Không biến đổi xuyên qua âm tiết (khoảng trắng / ranh giới từ)
+        // No transform across a syllable boundary (space / word boundary)
         assertEquals("dung f", engine.process("dung f"))
         assertEquals("học sinh", engine.process("hocj sinh"))
     }
@@ -819,7 +821,7 @@ class VietnameseComposerTest {
 
     @Test
     fun testTypingOrderFreedomToneBeforeAndAfter() {
-        // Gõ dấu trước hoặc gõ biến đổi nguyên âm trước
+        // Tone key first, or vowel fold first — both orders work
         assertEquals("ngưới", engine.process("nguoisw"))
         assertEquals("người", engine.process("nguoifw"))
         assertEquals("người", engine.process("nguowif"))
@@ -834,7 +836,7 @@ class VietnameseComposerTest {
         assertEquals("gửi", engine.process("guirw"))
         assertEquals("gứi", engine.process("guiws"))
 
-        // Không tự động biến đổi nếu không có phím biến đổi tương ứng
+        // No automatic transform without the matching fold key
         assertEquals("tiéng", engine.process("tiengs"))
         assertEquals("tiếng", engine.process("tieengs"))
         assertEquals("uóng", engine.process("uongs"))
@@ -871,9 +873,9 @@ class VietnameseComposerTest {
     fun testUoUpgradeToUoWithCoda() {
         // uow -> uơ (open)
         assertEquals("thuơ", engine.process("thuow"))
-        // thuow + ng -> thương (fold khi có coda hợp lệ ahead)
+        // thuow + ng -> thương (folds when a valid coda follows)
         assertEquals("thương", engine.process("thuowng"))
-        // thuơ + ng -> thuơng: uơ là rime mở, 'ng' giữ literal
+        // thuơ + ng -> thuơng: uơ is an open rime, 'ng' stays literal
         assertEquals("thuơng", engine.process("thuơng"))
         assertEquals("thuơi", engine.process("thuơi"))
     }
@@ -930,11 +932,11 @@ class VietnameseComposerTest {
         val result1 = engine.processKey('k').text
         assertEquals("tiêngk", result1)
 
-        // Backspace xóa 'k' còn "tiêng"
+        // Backspace removes 'k', leaving "tiêng"
         val result2 = engine.backspace()
         assertEquals("tiêng", result2)
 
-        // Gõ 's' -> "tiếng"
+        // Type 's' -> "tiếng"
         val result3 = engine.processKey('s').text
         assertEquals("tiếng", result3)
     }
@@ -1003,25 +1005,25 @@ class VietnameseComposerTest {
 
     @Test
     fun testBackspaceDeepseelGraphemeDeletion() {
-        // Gõ "deepseel": Telex fold chạy ngay khi gõ (ee -> ê, s -> dấu sắc),
-        // rồi 'e' sau coda "p" tiêu biến fold, dấu sắc trụ lại trên e gốc —
-        // nên display là "dépeel" trong khi raw buffer vẫn là "deepseel".
+        // Typing "deepseel": the Telex fold runs as you type (ee -> ê, s -> acute),
+        // then 'e' after the coda "p" dissolves the fold, the acute stays on the
+        // root 'e' — so the display is "dépeel" while the raw buffer is still "deepseel".
         engine.reset()
         for (c in "deepseel") {
             engine.processKey(c)
         }
         assertEquals("dépeel", engine.toDisplayString())
 
-        // Backspace xoá ĐÚNG 1 grapheme hiển thị (kiểu Gboard), không xoá phím
-        // thô. Survivor "dépee" không round-trip được (adoptRoundTrip == null)
-        // nên buffer bị khoá literal (composeAsVietnamese = false) — không bao giờ bị
-        // diễn giải Telex lại.
+        // Backspace removes exactly 1 display grapheme (Gboard-style), not the raw
+        // key. The survivor "dépee" cannot round-trip (adoptRoundTrip == null)
+        // so the buffer locks to literal (composeAsVietnamese = false) — it is
+        // never re-interpreted as Telex.
         val afterDelL = engine.backspace()
         assertEquals("dépee", afterDelL)
         assertFalse(engine.composeAsVietnamese)
 
-        // Gõ 'k' sau khi xoá 'l' chỉ nối chữ vào buffer literal: "dépee" ->
-        // "dépeek" (không bị biến đổi tiếp).
+        // Typing 'k' after deleting 'l' just appends to the literal buffer: "dépee" ->
+        // "dépeek" (no further transformation).
         val afterAddK = engine.processKey('k').text
         assertEquals("dépeek", afterAddK)
     }
@@ -1046,18 +1048,18 @@ class VietnameseComposerTest {
         for (c in "chuyeenr") {
             engine.processKey(c)
         }
-        // Lúc này từ hoàn thành là "chuyển"
-        // Xóa lần 1: xóa 'n' -> còn "chuyể"
+        // The completed word here is "chuyển"
+        // Delete 1: remove 'n' -> leaves "chuyể"
         assertEquals("chuyể", engine.backspace())
-        // Xóa lần 2: xóa 'ể' -> còn "chuy"
+        // Delete 2: remove 'ể' -> leaves "chuy"
         assertEquals("chuy", engine.backspace())
-        // Xóa lần 3: xóa 'y' -> còn "chu"
+        // Delete 3: remove 'y' -> leaves "chu"
         assertEquals("chu", engine.backspace())
-        // Xóa lần 4: xóa 'u' -> còn "ch"
+        // Delete 4: remove 'u' -> leaves "ch"
         assertEquals("ch", engine.backspace())
-        // Xóa lần 5: xóa 'h' -> còn "c"
+        // Delete 5: remove 'h' -> leaves "c"
         assertEquals("c", engine.backspace())
-        // Xóa lần 6: xóa 'c' -> còn ""
+        // Delete 6: remove 'c' -> leaves ""
         assertEquals("", engine.backspace())
     }
 
@@ -1079,11 +1081,11 @@ class VietnameseComposerTest {
         val lastResult = engine.processKey('g')
         assertEquals("đang", lastResult.text)
 
-        // Gọi process độc lập không được làm ảnh hưởng đến composingText hay buffer interactive
+        // An independent process() call must not disturb composingText or the interactive buffer
         val result = engine.process("tiếng việt")
         assertEquals("tiếng việt", result)
 
-        // Trạng thái interactive vẫn phải nguyên vẹn là "đang"
+        // The interactive state must still be intact as "đang"
         val afterDel = engine.backspace()
         assertEquals("đan", afterDel)
     }

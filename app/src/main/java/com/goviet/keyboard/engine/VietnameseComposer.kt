@@ -32,7 +32,7 @@ class VietnameseComposer(var options: EngineOptions = EngineOptions()) {
     class SyllableState(
         var onset: OwnedBuffer = OwnedBuffer(),
         var nucleus: OwnedBuffer = OwnedBuffer(),
-        /** Bán âm cuối (closing glide i/y/u/o) — separate from the core so the
+        /** Closing semivowel (closing glide i/y/u/o) — separate from the core so the
          *  rime mirrors the Vietnamese syllable structure: onset + nucleus +
          *  semi-coda + coda. Folds and tones address the core through it. */
         var semiCoda: OwnedBuffer = OwnedBuffer(),
@@ -233,10 +233,11 @@ class VietnameseComposer(var options: EngineOptions = EngineOptions()) {
     }
 
     /**
-     * Splits a trailing closing glide (bán âm cuối i/y/u/o) off the core into
-     * [SyllableState.semiCoda], so the state mirrors the Vietnamese structure
-     * onset + nucleus + semi-coda. Runs at the end of resegment; the render
-     * and rime-key paths already span core+glide, so the display is untouched.
+     * Splits a trailing closing glide (closing semivowels i/y/u/o) off the core
+     * into [SyllableState.semiCoda], so the state mirrors the Vietnamese
+     * structure onset + nucleus + semi-coda. Runs at the end of resegment;
+     * the render and rime-key paths already span core+glide, so the display
+     * is untouched.
      */
     private fun splitTrailingGlide(out: SyllableState) {
         if (out.semiCoda.isNotEmpty() || out.coda.isNotEmpty() || out.rawSuffix.isNotEmpty()) return
@@ -476,9 +477,9 @@ class VietnameseComposer(var options: EngineOptions = EngineOptions()) {
 
     /**
      * Untoggles the nucleus core for a same-key re-press. A trailing closing
-     * glide (bán âm cuối i/y/u/o) is transparent to the fold key: skip it,
-     * revert only the core char to its plain base, keep the glide untouched
-     * (ưu → uu, ưi → ui, ây → ay).
+     * glide (closing semivowel i/y/u/o) is transparent to the fold key: skip
+     * it, revert only the core char to its plain base, keep the glide
+     * untouched (ưu → uu, ưi → ui, ây → ay).
      */
     private fun untoggleCore(nuc: String): String {
         var end = nuc.length
@@ -576,9 +577,9 @@ class VietnameseComposer(var options: EngineOptions = EngineOptions()) {
             }
             /*
              * Same-key re-press that folds nothing new: a trailing closing
-             * glide (bán âm cuối i/y/u/o) is transparent to the fold key,
-             * so the key addresses the core — untoggle just the core, keep
-             * the glide, let the key out as literal text and lock:
+             * glide (closing semivowel i/y/u/o) is transparent to the fold
+             * key, so the key addresses the core — untoggle just the core,
+             * keep the glide, let the key out as literal text and lock:
              * uwuw → uuw, uwiw → uiw. The adjacent (taaa) and closed-coda
              * (taata) re-presses are handled by the untoggle path above.
              */
@@ -665,7 +666,7 @@ class VietnameseComposer(var options: EngineOptions = EngineOptions()) {
                 if (out.semiCoda.isEmpty() && RimeMap.isClosingGlide(c) &&
                     RimeMap.isGlideFinalRime(candidateKey)
                 ) {
-                    // A closing semivowel (bán âm cuối) closes a codaless rime:
+                    // A closing semivowel (i/y/u/o) closes a codaless rime:
                     // route it straight into semiCoda instead of the core.
                     out.semiCoda.append(c)
                 } else {
@@ -694,7 +695,7 @@ class VietnameseComposer(var options: EngineOptions = EngineOptions()) {
     /**
      * Consonant → coda via the flat map.  The fold keys that follow (e.g. the
      * double-a in tuana) are folded by the later modifier pass, so no lookahead
-     * is needed here: the rime keys are resolved in gõ order (tuana → tuân).
+     * is needed here: the rime keys are resolved in keystroke order (tuana → tuân).
      * Always consumes the key: a rejected consonant becomes literal text.
      */
     private fun tryCoda(c: Char, out: SyllableState, ctx: ScanCtx): Boolean {

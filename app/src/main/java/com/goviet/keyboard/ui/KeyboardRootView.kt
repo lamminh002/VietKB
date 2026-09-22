@@ -653,8 +653,8 @@ class KeyboardRootView @JvmOverloads constructor(
     private fun getNavigationBarPaddingPx(context: Context): Int {
         val isLandscape = context.resources.configuration.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE
         if (isLandscape) {
-            // Ở chế độ nằm ngang, chiều cao màn hình rất quý giá (~360-400dp).
-            // Hạ tối đa khoảng cách từ mép màn hình tới phím cách xuống mức tối thiểu (2dp).
+            // In landscape mode, screen height is very precious (~360-400dp).
+            // Reduce the maximum margin from the screen edge to the space key down to the minimum (2dp).
             return 2f.dpPx(context)
         }
 

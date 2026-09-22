@@ -185,11 +185,11 @@ class StandardLetterGridView @JvmOverloads constructor(
 
                 val isSpaceRow = (rowIndex == rows.size - 1)
                 if (isSpaceRow) {
-                    // Trừ hàng phím space: 2 bên chia đều theo maxClusterWidth để phím space lớn, cân bằng cho 2 ngón cái
+                    // Except for the space row: both sides split evenly by maxClusterWidth so the space key is large, balanced for both thumbs
                     layoutCluster(leftKeys, paddingLeft, maxClusterWidth, topOfRow, bottomOfRow)
                     layoutCluster(rightKeys, width - paddingRight - maxClusterWidth, maxClusterWidth, topOfRow, bottomOfRow)
                 } else {
-                    // Các hàng phím còn lại: các phím có cùng kích thước chuẩn standardKeyWidth, không ép đều 2 bên
+                    // The remaining key rows: keys share the standard standardKeyWidth, not forced evenly on both sides
                     var currentX = paddingLeft
                     for (key in leftKeys) {
                         val actualWidth = key.weight * standardKeyWidth

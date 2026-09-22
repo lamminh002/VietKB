@@ -44,7 +44,7 @@ class SemiCodaEdgeTest {
 
     @Test
     fun sắcToneLandsOnCoreA() {
-        // "au"+s → sắc on the 'a' (no â resolve on the tone-only path).
+        // "au"+s → acute on the 'a' (no â resolve on the tone-only path).
         assertEquals("láu", engine.process("laus"))
     }
 
