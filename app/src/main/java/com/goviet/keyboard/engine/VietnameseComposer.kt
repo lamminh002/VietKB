@@ -445,17 +445,17 @@ class VietnameseComposer(var options: EngineOptions = EngineOptions()) {
     }
 
     /**
-     * Untoggles the nucleus core for a same-key re-press. A trailing u/i
-     * after ư is a closing semivowel, transparent to the fold key: only the
-     * last folded char — the recorded fold's own target — reverts to its
-     * plain base, the glide stays untouched (ưu → uu, ưi → ui).
+     * Untoggles the nucleus core for a same-key re-press. A trailing closing
+     * glide (bán âm cuối i/y/u/o) is transparent to the fold key: skip it,
+     * revert only the core char to its plain base, keep the glide untouched
+     * (ưu → uu, ưi → ui, ây → ay).
      */
     private fun untoggleCore(nuc: String): String {
-        var core = -1
-        for (i in nuc.indices) {
-            if (RimeMap.plainOf(nuc[i]) != nuc[i]) core = i
-        }
-        if (core < 0) return nuc
+        var end = nuc.length
+        while (end > 0 && RimeMap.isClosingGlide(nuc[end - 1])) end--
+        if (end == 0) return nuc
+        val core = end - 1
+        if (RimeMap.plainOf(nuc[core]) == nuc[core]) return nuc
         val sb = StringBuilder(nuc)
         sb.setCharAt(core, RimeMap.plainOf(nuc[core]))
         return sb.toString()
@@ -545,10 +545,10 @@ class VietnameseComposer(var options: EngineOptions = EngineOptions()) {
                 return pos + 1
             }
             /*
-             * Same-key re-press that folds nothing new: a trailing u/i
-             * after ư is a closing semivowel, transparent to the fold key,
-             * so the key addresses the ư core — untoggle just the core,
-             * keep the glide, let the key out as literal text and lock:
+             * Same-key re-press that folds nothing new: a trailing closing
+             * glide (bán âm cuối i/y/u/o) is transparent to the fold key,
+             * so the key addresses the core — untoggle just the core, keep
+             * the glide, let the key out as literal text and lock:
              * uwuw → uuw, uwiw → uiw. The adjacent (taaa) and closed-coda
              * (taata) re-presses are handled by the untoggle path above.
              */

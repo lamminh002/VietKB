@@ -129,6 +129,22 @@ class ComposerSafetyMatrixTest {
         assertEquals("uiw", engine.process("uwiw"))
     }
 
+    // ── 2d. Closing-glide rimes (bán âm cuối i/y/u/o) ───────────────────────
+    // Glide-final rimes take no coda; folds and tones address the core
+    // through the transparent glide.
+    @Test
+    fun closingGlideRimes() {
+        assertEquals("lưu", engine.process("luwu"))
+        assertEquals("cửu", engine.process("cuwur"))
+        assertEquals("sáu", engine.process("saau"))
+        assertEquals("cao", engine.process("cao"))
+        assertEquals("rau", engine.process("rau"))
+        assertEquals("mai", engine.process("mai"))
+        assertEquals("thầy", engine.process("thaay"))
+        assertEquals("chịu", engine.process("chiuj"))
+        assertEquals("lều", engine.process("leefuf"))
+    }
+
     // ── 3. gi / qu / uo families ───────────────────────────────────────────
     @Test
     fun giOnsetMatrix() {

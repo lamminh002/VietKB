@@ -172,6 +172,8 @@ object RimeMap {
 
             NucSpec("uye", C_UYE,  2),    NucSpec("uyê", C_UYE, 2),
 
+            // Closing-glide (bán âm cuối i/y/u/o) rimes: the glide closes the
+            // rime, so C_NONE throughout — extension/tone math runs on the core.
             NucSpec("ai",  C_NONE, 0), NucSpec("ao",  C_NONE, 0),
             NucSpec("au",  C_NONE, 0), NucSpec("ay",  C_NONE, 0),
             NucSpec("âu",  C_NONE, 0), NucSpec("ây",  C_NONE, 0),
@@ -644,6 +646,14 @@ object RimeMap {
         for (c in VOWEL_MOD_KEYS) arr[c.code] = true
     }
 
+    /** Closing semivowels (bán âm cuối): i, y, u, o. A glide closes the rime —
+     *  glide-final nuclei take no coda (all C_NONE below); tones and folds
+     *  address the core through the transparent glide. */
+    val CLOSING_GLIDES = "iyuo"
+    private val CLOSING_GLIDE_SET = BooleanArray(512).also { arr ->
+        for (c in CLOSING_GLIDES) arr[c.code] = true
+    }
+
     /** Valid Vietnamese coda strings. */
     val CODAS = arrayOf("ng", "nh", "ch", "m", "p", "n", "t", "c")
 
@@ -666,6 +676,13 @@ object RimeMap {
     fun isFoldKey(c: Char): Boolean {
         val code = c.lowercaseChar().code
         return code in 0 until 512 && VOWEL_MOD_SET[code]
+    }
+
+    /** Closing-glide (bán âm cuối i/y/u/o) letter — O(1) BooleanArray lookup. */
+    @JvmStatic
+    fun isClosingGlide(c: Char): Boolean {
+        val code = c.lowercaseChar().code
+        return code in 0 until 512 && CLOSING_GLIDE_SET[code]
     }
 
     /** Plain letter that a folded display letter unfolds back to — casing
