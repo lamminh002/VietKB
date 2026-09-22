@@ -120,6 +120,14 @@ class ComposerSafetyMatrixTest {
         assertEquals("chêch", engine.process("cheche"))
     }
 
+    // ── 2c. Same-key re-press across an intervening vowel ───────────────────
+    // The second w folds nothing new (ư is terminal for w), so it dissolves
+    // the recorded fold in place instead of going literal: uwuw → uuw.
+    @Test
+    fun foldDissolution_acrossInterveningVowel() {
+        assertEquals("uuw", engine.process("uwuw"))
+    }
+
     // ── 3. gi / qu / uo families ───────────────────────────────────────────
     @Test
     fun giOnsetMatrix() {

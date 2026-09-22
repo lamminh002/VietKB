@@ -527,6 +527,25 @@ class VietnameseComposer(var options: EngineOptions = EngineOptions()) {
                 ctx.justUntoggled = false
                 return pos + 1
             }
+            /*
+             * Same-key re-press that folds nothing new: the key cannot
+             * transform this nucleus any further (ư is terminal for w), so
+             * instead of going literal it dissolves the recorded fold in
+             * place — unfold the nucleus, let the key out as literal text
+             * and lock: uwuw → uuw. The adjacent (taaa) and closed-coda
+             * (taata) re-presses are handled by the untoggle path above.
+             */
+            if (!ctx.syllableLocked && ctx.fold.active && cLow == ctx.fold.key &&
+                !out.nucleus.contentEquals(ctx.fold.plainNucleus)) {
+                out.nucleus.setTo(unfoldToBase(out.nucleus.toStringVal()))
+                out.rawSuffix.append(c)
+                ctx.syllableLocked = true
+                ctx.fold.clear()
+                ctx.nucKey = if (out.nucleus.isEmpty()) 0 else RimeMap.rimeKey(out.nucleus)
+                ctx.rimeKey = ctx.nucKey
+                ctx.justUntoggled = true
+                return pos + 1
+            }
         }
         if (!ctx.syllableLocked && out.nucleus.isNotEmpty() && cLow != 'w') {
             val combo = RimeMap.combineNucleus(out.nucleus, c)
