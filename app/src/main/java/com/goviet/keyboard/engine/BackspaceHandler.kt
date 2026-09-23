@@ -63,13 +63,6 @@ class BackspaceHandler(
                 return
             }
 
-            controller.adoptPrefixAtCaret(ic)
-            if (controller.inputEngine.isComposing()) {
-                performComposingBackspace(ic)
-                controller.service.evaluateAutoShift()
-                return
-            }
-
             deleteLastGraphemeOrChar(ic)
             controller.service.evaluateAutoShift()
         } finally {
@@ -199,10 +192,9 @@ class BackspaceHandler(
 
         replaceComposingText(ic, display)
         if (controller.composingStartInEditor >= 0) {
+            val target = controller.composingStartInEditor + caretInDisplay
             if (caretInDisplay < display.length) {
-                controller.moveCursorTo(ic, controller.composingStartInEditor + caretInDisplay)
-            } else {
-                controller.registerCaretAsOurs(controller.composingStartInEditor + display.length)
+                ic.setSelection(target, target)
             }
         }
     }
